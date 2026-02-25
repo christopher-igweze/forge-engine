@@ -31,6 +31,7 @@ from forge.schemas import (
     IntegrationValidationResult,
     ProductionReadinessReport,
     RemediationPlan,
+    TriageResult,
 )
 
 NODE_ID = os.getenv("FORGE_NODE_ID", "forge-engine")
@@ -402,12 +403,18 @@ async def fix_single(
 
 
 async def _run_discovery(
-    app: Agent,
+    app,
     state: ForgeExecutionState,
     cfg: ForgeConfig,
     resolved_models: dict[str, str],
 ) -> dict:
-    """Run Discovery phase: Agents 1-4."""
+    """Run Discovery phase: Agents 1-4 (classic) or Hive Discovery (swarm)."""
+
+    # ── Swarm mode: delegate to Hive Discovery ───────────────────────
+    if cfg.discovery_mode == "swarm":
+        return await _run_swarm_discovery(app, state, cfg, resolved_models)
+
+    # ── Classic mode: sequential Agent 1 → parallel Agents 2-4 ───────
     invocations = 0
 
     # Agent 1: Codebase Analyst (always runs first — everything depends on it)
@@ -502,18 +509,115 @@ async def _run_discovery(
     return {"invocations": invocations}
 
 
+async def _run_swarm_discovery(
+    app,
+    state: ForgeExecutionState,
+    cfg: ForgeConfig,
+    resolved_models: dict[str, str],
+) -> dict:
+    """Run Discovery via Hive Discovery (swarm mode).
+
+    Replaces Agents 1-6 with Layer 0 (deterministic graph) + Layer 1
+    (parallel swarm workers) + Layer 2 (sonnet synthesis).
+    """
+    logger.info("Discovery [swarm]: Running Hive Discovery pipeline")
+
+    hive_result = await app.call(
+        f"{NODE_ID}.run_hive_discovery",
+        repo_path=state.repo_path,
+        repo_url=state.repo_url,
+        artifacts_dir=state.artifacts_dir,
+        worker_model=resolved_models.get("swarm_worker_model", "minimax/minimax-m2.5"),
+        synthesis_model=resolved_models.get("synthesizer_model", "anthropic/claude-sonnet-4.6"),
+        ai_provider=cfg.provider_for_role("swarm_worker"),
+        target_segments=cfg.swarm_target_segments,
+        enable_wave2=cfg.swarm_enable_wave2,
+        worker_types=cfg.swarm_worker_types,
+    )
+
+    if not isinstance(hive_result, dict):
+        hive_result = {}
+
+    # Map hive result into ForgeExecutionState
+    from forge.schemas import CodebaseMap
+
+    cm_data = hive_result.get("codebase_map", {})
+    if isinstance(cm_data, dict):
+        # Ensure required fields exist
+        cm_data.setdefault("files", [])
+        cm_data.setdefault("loc_total", 0)
+        cm_data.setdefault("file_count", 0)
+        cm_data.setdefault("primary_language", "")
+        cm_data.setdefault("languages", [])
+        state.codebase_map = CodebaseMap(**cm_data)
+
+    # Parse findings
+    findings_data = hive_result.get("findings", [])
+    all_findings = []
+    for f_data in findings_data:
+        if isinstance(f_data, dict):
+            f_data.setdefault("category", "quality")
+            f_data.setdefault("severity", "medium")
+            f_data.setdefault("title", "Untitled finding")
+            f_data.setdefault("description", "")
+            try:
+                all_findings.append(AuditFinding(**f_data))
+            except Exception as e:
+                logger.warning("Failed to parse hive finding: %s", e)
+
+    # Categorize findings
+    state.security_findings = [f for f in all_findings if f.category.value == "security"]
+    state.quality_findings = [f for f in all_findings if f.category.value == "quality"]
+    state.architecture_findings = [f for f in all_findings if f.category.value == "architecture"]
+    state.all_findings = all_findings
+
+    # Parse triage result
+    triage_data = hive_result.get("triage_result", {})
+    if isinstance(triage_data, dict) and triage_data.get("decisions"):
+        state.triage_result = TriageResult(**triage_data)
+
+    # Parse remediation plan
+    plan_data = hive_result.get("remediation_plan", {})
+    if isinstance(plan_data, dict) and plan_data.get("items"):
+        state.remediation_plan = RemediationPlan(**plan_data)
+
+    invocations = hive_result.get("stats", {}).get("total_invocations", 1)
+
+    logger.info(
+        "Discovery [swarm]: complete — %d security, %d quality, %d architecture findings",
+        len(state.security_findings),
+        len(state.quality_findings),
+        len(state.architecture_findings),
+    )
+
+    return {"invocations": invocations}
+
+
 async def _run_triage(
-    app: Agent,
+    app,
     state: ForgeExecutionState,
     cfg: ForgeConfig,
     resolved_models: dict[str, str],
     tier1_findings: list[dict] | None = None,
 ) -> dict:
-    """Run Triage phase: Agents 5-6."""
+    """Run Triage phase: Agents 5-6.
+
+    In swarm mode, triage and planning are already done by the synthesis
+    agent in Layer 2. Skip if state already has triage + plan.
+    """
     invocations = 0
 
     if not state.all_findings:
         logger.info("Triage: No findings to triage")
+        return {"invocations": 0}
+
+    # Swarm mode: synthesis already produced triage + plan
+    if (
+        cfg.discovery_mode == "swarm"
+        and state.triage_result is not None
+        and state.remediation_plan is not None
+    ):
+        logger.info("Triage: skipping — swarm synthesis already produced triage + plan")
         return {"invocations": 0}
 
     all_findings_dicts = [f.model_dump() for f in state.all_findings]

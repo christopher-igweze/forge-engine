@@ -74,6 +74,7 @@ class StandaloneDispatcher:
             run_integration_validator,
             run_debt_tracker,
         )
+        from forge.reasoners.hive_discovery import run_hive_discovery
 
         for fn in (
             run_codebase_analyst,
@@ -89,6 +90,7 @@ class StandaloneDispatcher:
             run_escalation_agent,
             run_integration_validator,
             run_debt_tracker,
+            run_hive_discovery,
         ):
             self._registry[fn.__name__] = fn
 
