@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Literal
+from typing import Any, Generic, Literal, TypeVar
+
+T = TypeVar("T")
 
 
 class Tool(str, Enum):
@@ -101,7 +103,7 @@ class Metrics:
 
 
 @dataclass(frozen=True, slots=True)
-class AgentResponse[T]:
+class AgentResponse(Generic[T]):
     """Typed response from an AI invocation."""
 
     result: str | None
