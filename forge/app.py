@@ -234,6 +234,103 @@ async def scan(
     return await discover(repo_url=repo_url, repo_path=repo_path, config=config)
 
 
+@app.reasoner()
+async def fix_single(
+    repo_path: str = "",
+    finding: dict | None = None,
+    codebase_map: dict | None = None,
+    config: dict | None = None,
+) -> dict:
+    """Fix a single finding — useful for iterative fixing or testing.
+
+    Takes a finding object (from a prior scan) and runs it through
+    the triage → coder → reviewer pipeline.
+    """
+    if not finding:
+        return {"success": False, "error": "No finding provided"}
+
+    cfg = ForgeConfig(**(config or {}))
+    resolved = cfg.resolved_models()
+
+    rp = repo_path or cfg.repo_path
+    if not rp:
+        return {"success": False, "error": "No repo_path provided"}
+
+    state = ForgeExecutionState(
+        mode=ForgeMode.REMEDIATION,
+        repo_path=rp,
+        artifacts_dir=os.path.join(rp, ".artifacts"),
+    )
+    os.makedirs(state.artifacts_dir, exist_ok=True)
+
+    # Parse the finding
+    audit_finding = AuditFinding(**finding)
+    state.all_findings = [audit_finding]
+
+    # Parse codebase map if provided
+    if codebase_map:
+        from forge.schemas import CodebaseMap
+        state.codebase_map = CodebaseMap(**codebase_map)
+
+    # Run triage on the single finding
+    triage_dict = await app.call(
+        f"{NODE_ID}.run_triage_classifier",
+        findings=[finding],
+        codebase_map=codebase_map or {},
+        artifacts_dir=state.artifacts_dir,
+        model=resolved.get("triage_classifier_model", "anthropic/claude-haiku-4.5"),
+        ai_provider=cfg.provider_for_role("triage_classifier"),
+    )
+
+    # Determine tier from triage
+    from forge.schemas import RemediationItem, RemediationTier, TriageResult
+    tier = RemediationTier.TIER_2  # default
+    if isinstance(triage_dict, dict):
+        triage = TriageResult(**triage_dict)
+        if triage.decisions:
+            tier = triage.decisions[0].tier
+
+    # Build a minimal remediation plan
+    item = RemediationItem(
+        finding_id=audit_finding.id,
+        title=audit_finding.title,
+        tier=tier,
+        priority=1,
+    )
+    plan = RemediationPlan(
+        items=[item],
+        execution_levels=[[audit_finding.id]],
+        total_items=1,
+    )
+    state.remediation_plan = plan
+
+    # Run through remediation (tier router + control loops)
+    from forge.execution.tier_router import route_plan_items
+    from forge.execution.forge_executor import execute_remediation
+
+    handled, ai_items = route_plan_items(plan, [audit_finding], state, rp, cfg)
+
+    if ai_items:
+        ai_plan = RemediationPlan(
+            items=ai_items,
+            execution_levels=[[ai_items[0].finding_id]],
+            total_items=len(ai_items),
+        )
+        state.remediation_plan = ai_plan
+        await execute_remediation(app, NODE_ID, state, cfg, resolved)
+
+    # Build result
+    fix_result = state.completed_fixes[0] if state.completed_fixes else None
+    return {
+        "success": bool(fix_result and fix_result.outcome.value in ("completed", "skipped")),
+        "finding_id": audit_finding.id,
+        "tier": tier.value,
+        "outcome": fix_result.outcome.value if fix_result else "no_fix",
+        "summary": fix_result.summary if fix_result else "No fix produced",
+        "files_changed": fix_result.files_changed if fix_result else [],
+    }
+
+
 # ── Internal Pipeline Stages ─────────────────────────────────────────
 
 
