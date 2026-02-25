@@ -1,121 +1,185 @@
-# FORGE Engine -- Deployment Operations Guide
+# Vibe2Prod (FORGE Engine) — Deployment & Operations Guide
 
-Version: 0.2.0
+Version: 0.3.0
 
 ---
 
-## 1. Prerequisites
+## 1. Two Execution Modes
+
+| Mode | Install | Use Case |
+|---|---|---|
+| **CLI (standalone)** | `pip install vibe2prod` | Local use. Code stays on your machine. User brings own API key. |
+| **Platform (Daytona)** | `pip install vibe2prod[platform]` | Production. Runs in Daytona sandboxes via AgentField. |
+
+---
+
+## 2. CLI Mode (Standalone)
+
+### Quick Start
+
+```bash
+pip install vibe2prod
+
+export OPENROUTER_API_KEY=sk-or-v1-...
+
+vibe2prod scan ./my-app           # Discovery only (scan + triage)
+vibe2prod fix ./my-app            # Full pipeline (scan + fix + validate)
+vibe2prod report ./my-app         # View report from last run
+```
+
+### Prerequisites
 
 | Requirement | Version | Notes |
 |---|---|---|
-| Python | 3.12+ | Required by `pyproject.toml` (`requires-python = ">=3.12"`) |
-| AgentField | >= 0.1.9 | Core dependency; provides the agent runtime and control plane |
-| opencode | v1.2+ | Required for coder agents (Tier 2/3), test generator, integration validator |
+| Python | 3.12+ | Required by `pyproject.toml` |
+| git | any recent | Worktree support for parallel fix isolation |
 | OpenRouter API key | -- | All LLM calls route through OpenRouter |
-| git | any recent | Worktree support required for parallel fix isolation |
+| opencode | v1.2+ | Required for coder agents (Tier 2/3), test generator |
 
-Optional dependencies:
+Optional:
+- `weasyprint >= 60.0` — PDF report generation (`pip install vibe2prod[pdf]`)
 
-- `weasyprint >= 60.0` -- PDF report generation (`pip install forge-engine[pdf]`)
-- `claude-agent-sdk >= 0.1.20` -- Claude provider support (`pip install forge-engine[claude]`)
+### CLI Commands
 
-Install the package:
+#### `vibe2prod scan <path>`
+
+Discovery mode: runs Agents 1-6 (codebase analysis, security audit, quality audit, architecture review, triage, fix strategy). Produces findings but does **not** apply fixes.
 
 ```bash
-pip install -e .           # core only
-pip install -e ".[pdf]"    # with PDF report generation
-pip install -e ".[dev]"    # with test tooling
+vibe2prod scan ./my-app
+vibe2prod scan ./my-app --model anthropic/claude-haiku-4.5
+vibe2prod scan ./my-app --json          # JSON output
+vibe2prod scan ./my-app --verbose       # Debug logging
+```
+
+#### `vibe2prod fix <path>`
+
+Full remediation pipeline: all 12 agents. Fixes are applied in isolated git worktrees and merged back on success.
+
+```bash
+vibe2prod fix ./my-app
+vibe2prod fix ./my-app --coder-model anthropic/claude-sonnet-4.6
+vibe2prod fix ./my-app --max-retries 2
+vibe2prod fix ./my-app --dry-run        # Plan without applying fixes
+```
+
+#### `vibe2prod report <path>`
+
+Display the report from the last FORGE run.
+
+```bash
+vibe2prod report ./my-app               # Pretty text output
+vibe2prod report ./my-app --format json  # Raw JSON
+vibe2prod report ./my-app --format html  # HTML report
+```
+
+### Code Privacy
+
+In CLI mode, your code **never leaves your machine**. Only LLM API calls are sent to OpenRouter. No AgentField server, no Daytona sandbox, no telemetry phoning home.
+
+---
+
+## 3. Platform Mode (Daytona Sandboxes)
+
+Production deployment runs in **Daytona sandboxes** (Linux containers). This is the primary deployment target for the Vibe2Prod platform.
+
+### Prerequisites
+
+| Requirement | Version | Notes |
+|---|---|---|
+| Python | 3.12+ | Required by `pyproject.toml` |
+| AgentField | >= 0.1.9 | Agent runtime and control plane |
+| opencode | v1.2+ | Coder agents (Tier 2/3), test generator, integration validator |
+| OpenRouter API key | -- | All LLM calls route through OpenRouter |
+| git | any recent | Worktree support for parallel fix isolation |
+| Daytona | -- | Ephemeral sandbox orchestration |
+
+Optional:
+- `weasyprint >= 60.0` — PDF report generation (`pip install vibe2prod[platform,pdf]`)
+- `claude-agent-sdk >= 0.1.20` — Claude provider support (`pip install vibe2prod[platform,claude]`)
+
+### Install
+
+```bash
+pip install vibe2prod[platform]       # core + AgentField
+pip install vibe2prod[platform,pdf]   # with PDF report generation
+```
+
+### Start the Node
+
+```bash
+# Via entry point
+forge-engine
+
+# Via module
+python -m forge
+
+# With custom port and server
+FORGE_PORT=9000 AGENTFIELD_SERVER=http://control-plane:8080 python -m forge
+```
+
+The node registers itself with the AgentField control plane at startup.
+
+### Calling Reasoners via AgentField
+
+```bash
+agentfield call forge-engine.remediate \
+  --arg repo_path=/path/to/repo \
+  --arg config='{"mode": "full"}'
 ```
 
 ---
 
-## 2. Known Issues: opencode v1.2 on macOS
+## 4. Environment Variables
 
-The `opencode run` command hangs when spawned as a subprocess on macOS. This affects all coder agents (Tier 2/3), the test generator, and the integration validator -- any agent using the `opencode` provider.
-
-**Root causes:**
-
-- `opencode run` hangs due to non-TTY/piped stdout handling (upstream bug: `anomalyco/opencode#11891`)
-- The permission "ask" default blocks headless operation even when stdin is `/dev/null` (`anomalyco/opencode#14473`)
-- This affects even built-in models -- it is a fundamental non-TTY issue, not a model problem
-
-**Workaround:**
-
-Use a Python wrapper script at `~/.opencode/bin/opencode` that runs opencode in AGENT mode. The wrapper includes a structured output fallback: after the agent loop completes, it makes a cleanup API call if the expected JSON output file was not written.
-
-**Linux/Docker:**
-
-The real v1.2 binary works without issues on Linux (different code path for TTY detection). No wrapper needed in containerized deployments.
-
----
-
-## 3. Environment Variables
-
-### Required
+### Required (both modes)
 
 | Variable | Description |
 |---|---|
-| `OPENROUTER_API_KEY` | API key for OpenRouter. Used by both `openrouter_direct` and `opencode` providers. All LLM calls fail without this. |
+| `OPENROUTER_API_KEY` | API key for OpenRouter. All LLM calls fail without this. |
 
-### Optional
+### Platform mode only
 
 | Variable | Default | Description |
 |---|---|---|
-| `FORGE_NODE_ID` | `forge-engine` | AgentField node identifier. Change when running multiple FORGE instances. |
-| `WORKSPACES_DIR` | `/workspaces` | Directory for cloning repos when `repo_url` is provided instead of `repo_path`. |
-| `AGENTFIELD_SERVER` | `http://localhost:8080` | URL of the AgentField control plane server. |
-| `AGENTFIELD_API_KEY` | (none) | API key for authenticating with the AgentField server. |
-| `FORGE_PORT` | `8004` | Port the FORGE node listens on. |
-| `FORGE_HOST` | `0.0.0.0` | Host address the FORGE node binds to. |
+| `FORGE_NODE_ID` | `forge-engine` | AgentField node identifier |
+| `WORKSPACES_DIR` | `/workspaces` | Directory for cloning repos when `repo_url` is provided |
+| `AGENTFIELD_SERVER` | `http://localhost:8080` | AgentField control plane URL |
+| `AGENTFIELD_API_KEY` | (none) | AgentField authentication key |
+| `FORGE_PORT` | `8004` | Port the FORGE node listens on |
+| `FORGE_HOST` | `0.0.0.0` | Host the FORGE node binds to |
 
 ---
 
-## 4. Configuration
+## 5. Configuration
 
 ### ForgeConfig Fields
 
-The `config` dict passed to any reasoner is validated against `ForgeConfig`. All fields have defaults.
+The `config` dict (passed via CLI `--model` flags or API payload) is validated against `ForgeConfig`. All fields have defaults.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `runtime` | string | `"open_code"` | Runtime backend identifier. |
-| `models` | dict | `null` | Per-role model overrides (see Model Routing below). |
-| `mode` | enum | `"full"` | Pipeline mode: `full`, `discovery`, `remediation`, `validation`. |
-| `max_inner_retries` | int | `3` | Inner loop: max coder retries on REQUEST_CHANGES. |
-| `max_middle_escalations` | int | `2` | Middle loop: max RECLASSIFY/DEFER escalation attempts. |
-| `max_outer_replans` | int | `1` | Outer loop: how many times to re-run the Fix Strategist. |
-| `agent_timeout_seconds` | int | `900` | Per-agent timeout (15 minutes). |
-| `enable_tier0_autofix` | bool | `true` | Enable Tier 0 auto-skip for invalid/noise findings. |
-| `enable_tier1_rules` | bool | `true` | Enable Tier 1 deterministic template fixes. |
-| `enable_parallel_audit` | bool | `true` | Run discovery audit agents (2-4) concurrently. |
-| `enable_learning` | bool | `true` | Log training data pairs for the fine-tuning flywheel. |
-| `repo_url` | string | `""` | Git URL to clone. Mutually exclusive with `repo_path`. |
-| `repo_path` | string | `""` | Local path to the repository. |
-| `enable_github_pr` | bool | `true` | Create a GitHub PR with the fixes. |
-| `github_pr_base` | string | `"main"` | Base branch for the PR. |
-| `dry_run` | bool | `false` | Scan only, produce findings but do not apply fixes. |
-| `skip_tiers` | list[int] | `[]` | Skip specific tiers (e.g., `[0]` to process noise findings). |
-| `focus_categories` | list[str] | `[]` | Only fix findings in these categories (e.g., `["security"]`). |
+| `runtime` | string | `"open_code"` | Runtime backend identifier |
+| `models` | dict | `null` | Per-role model overrides (see Model Routing) |
+| `mode` | enum | `"full"` | Pipeline mode: `full`, `discovery`, `remediation`, `validation` |
+| `max_inner_retries` | int | `3` | Inner loop: max coder retries on REQUEST_CHANGES |
+| `max_middle_escalations` | int | `2` | Middle loop: max escalation attempts |
+| `max_outer_replans` | int | `1` | Outer loop: how many times to re-run Fix Strategist |
+| `agent_timeout_seconds` | int | `900` | Per-agent timeout (15 minutes) |
+| `enable_tier0_autofix` | bool | `true` | Enable Tier 0 auto-skip for invalid/noise findings |
+| `enable_tier1_rules` | bool | `true` | Enable Tier 1 deterministic template fixes |
+| `enable_parallel_audit` | bool | `true` | Run discovery audit agents (2-4) concurrently |
+| `enable_learning` | bool | `true` | Log training data pairs |
+| `dry_run` | bool | `false` | Scan only, no fixes applied |
 
 ### Model Routing
 
-Model resolution follows a three-level cascade:
+Model resolution cascade: `FORGE_DEFAULT_MODELS < models.default < models.<role>`
 
-```
-FORGE_DEFAULT_MODELS < models.default < models.<role>
-```
-
-Pass overrides via the `models` dict in the config payload:
-
-```json
-{
-  "config": {
-    "models": {
-      "default": "anthropic/claude-haiku-4.5",
-      "coder_tier3": "anthropic/claude-sonnet-4.6"
-    }
-  }
-}
+```bash
+# CLI override
+vibe2prod fix ./my-app --model anthropic/claude-haiku-4.5
+vibe2prod fix ./my-app --coder-model anthropic/claude-sonnet-4.6
 ```
 
 Default model assignments:
@@ -129,260 +193,93 @@ Default model assignments:
 | `architecture_reviewer` | `anthropic/claude-haiku-4.5` | openrouter_direct | Mid-tier reasoning |
 | `fix_strategist` | `anthropic/claude-haiku-4.5` | openrouter_direct | Mid-tier reasoning |
 | `triage_classifier` | `anthropic/claude-haiku-4.5` | openrouter_direct | Mid-tier reasoning |
-| `test_generator` | `anthropic/claude-haiku-4.5` | opencode | Mid-tier, needs tools |
+| `test_generator` | `anthropic/claude-haiku-4.5` | opencode | Needs file tools |
 | `code_reviewer` | `anthropic/claude-haiku-4.5` | openrouter_direct | Mid-tier reasoning |
-| `integration_validator` | `anthropic/claude-haiku-4.5` | opencode | Mid-tier, needs tools |
-| `coder_tier2` | `anthropic/claude-sonnet-4.6` | opencode | Frontier coding model |
-| `coder_tier3` | `anthropic/claude-sonnet-4.6` | opencode | Frontier coding model |
+| `integration_validator` | `anthropic/claude-haiku-4.5` | opencode | Needs file tools |
+| `coder_tier2` | `anthropic/claude-sonnet-4.6` | opencode | Frontier coding |
+| `coder_tier3` | `anthropic/claude-sonnet-4.6` | opencode | Frontier coding |
 
-**Model ID format:** Use `provider/model` (e.g., `anthropic/claude-sonnet-4.6`). Do NOT prefix with `openrouter/` -- the client strips this prefix automatically, but omitting it avoids confusion.
+**Model ID format:** `provider/model` (e.g., `anthropic/claude-sonnet-4.6`). Do NOT prefix with `openrouter/`.
 
 ### Provider Routing
 
-Two providers serve different agent types:
-
-- **openrouter_direct** -- stdlib-only HTTPS client (`urllib.request`). Text-in, JSON-out. No subprocess, no CLI dependency. Used for all planning/analysis agents.
-- **opencode** -- Invokes the `opencode run` CLI as a subprocess. Provides file-editing tools (Read, Write, Edit, Bash, Glob, Grep). Used for coder agents, test generator, and integration validator.
-
----
-
-## 5. Running FORGE
-
-### Start the Node
-
-```bash
-# Via module
-python -m forge
-
-# Via entry point (after pip install)
-forge-engine
-
-# With custom port and server
-FORGE_PORT=9000 AGENTFIELD_SERVER=http://control-plane:8080 python -m forge
-```
-
-The node registers itself with the AgentField control plane at startup.
-
-### Available Reasoners
-
-#### `remediate` -- Full Pipeline
-
-Runs all 12 agents: discover, triage, fix, validate.
-
-```json
-{
-  "repo_url": "https://github.com/org/repo.git",
-  "config": {
-    "mode": "full",
-    "models": {
-      "coder_tier3": "anthropic/claude-sonnet-4.6"
-    }
-  }
-}
-```
-
-Or with a local path:
-
-```json
-{
-  "repo_path": "/path/to/local/repo",
-  "config": {
-    "enable_parallel_audit": true,
-    "max_inner_retries": 2
-  }
-}
-```
-
-#### `discover` / `scan` -- Discovery Only
-
-Runs Agents 1-5 (codebase analysis + audits + triage). No fixes applied. `scan` is an alias for `discover`.
-
-```json
-{
-  "repo_path": "/path/to/repo",
-  "config": {}
-}
-```
-
-#### `fix_single` -- Single Finding Fix
-
-Fixes one finding at a time. Useful for testing or iterative remediation.
-
-```json
-{
-  "repo_path": "/path/to/repo",
-  "finding": {
-    "id": "SEC-001",
-    "title": "SQL injection in user query",
-    "description": "Unsanitized user input in db.query()",
-    "category": "security",
-    "severity": "critical",
-    "locations": [{"file_path": "src/db.py"}],
-    "suggested_fix": "Use parameterized queries"
-  },
-  "codebase_map": {},
-  "config": {}
-}
-```
-
-### Calling Reasoners via AgentField
-
-```bash
-# Using the AgentField CLI or SDK
-agentfield call forge-engine.remediate \
-  --arg repo_path=/path/to/repo \
-  --arg config='{"mode": "full"}'
-```
+- **openrouter_direct** — stdlib HTTPS client. Text-in, JSON-out. Used for analysis/planning agents.
+- **opencode** — Invokes `opencode run` as subprocess with file-editing tools. Used for coders, test generator, integration validator.
 
 ---
 
 ## 6. Monitoring
 
-### Telemetry Output
+### Telemetry
 
-When `enable_learning` is `true` (default), FORGE writes telemetry to `<repo>/.artifacts/telemetry/` at the end of each run:
+When `enable_learning` is `true` (default), telemetry is written to `<repo>/.artifacts/telemetry/`:
 
 | File | Format | Contents |
 |---|---|---|
-| `cost_summary.json` | JSON | Aggregate cost by agent and model, total tokens, invocation counts, elapsed time |
-| `invocations.jsonl` | JSONL | One line per agent invocation: model, tokens, cost, latency, success/error |
-| `training_data.jsonl` | JSONL | One line per finding-fix pair: finding metadata, tier, outcome, files changed, retry count |
+| `cost_summary.json` | JSON | Cost by agent/model, total tokens, invocations |
+| `invocations.jsonl` | JSONL | Per-invocation: model, tokens, cost, latency |
+| `training_data.jsonl` | JSONL | Per-finding: metadata, tier, outcome, files changed |
 
-Example `cost_summary.json`:
+### Checkpoints
 
-```json
-{
-  "run_id": "forge-abc123",
-  "total_cost_usd": 0.0847,
-  "total_tokens": 52340,
-  "total_invocations": 14,
-  "successful_invocations": 13,
-  "failed_invocations": 1,
-  "cost_by_agent": {
-    "codebase_analyst": 0.0012,
-    "coder_tier2": 0.0534
-  },
-  "cost_by_model": {
-    "minimax/minimax-m2.5": 0.0045,
-    "anthropic/claude-sonnet-4.6": 0.0534
-  },
-  "training_pairs_logged": 5
-}
-```
-
-### Checkpoint Files
-
-During execution, FORGE saves checkpoints at phase boundaries in `<repo>/.forge-checkpoints/`:
-
-| File | Phase |
-|---|---|
-| `discovery_complete.json` | After Agents 1-4 finish |
-| `triage_complete.json` | After Agents 5-6 finish |
-| `fix_progress.json` | After remediation (Agents 7-10) |
-| `validation_complete.json` | After Agents 11-12 finish |
-
-Checkpoints are automatically cleared on successful completion. They persist on crash for resume.
+Saved at phase boundaries in `<repo>/.forge-checkpoints/`. Auto-cleared on success, persist on crash for resume.
 
 ### Reports
 
-On runs that include validation, reports are written to `<repo>/.artifacts/report/`:
-
-- JSON report (always)
-- HTML report (always)
-- PDF report (if `weasyprint` is installed)
+Written to `<repo>/.artifacts/report/`: JSON (always), HTML (always), PDF (if weasyprint installed).
 
 ### Worktrees
 
-During remediation, each Tier 2/3 fix gets its own git worktree under `<repo>/.forge-worktrees/`. Branch naming follows `forge/fix-<finding-id>`. Worktrees are cleaned up after each run (success or failure).
+Each Tier 2/3 fix gets its own git worktree under `<repo>/.forge-worktrees/`. Cleaned up after each run.
 
 ---
 
 ## 7. Troubleshooting
 
-### Common Issues
-
 **"OPENROUTER_API_KEY is not set"**
-
-All LLM calls require this key. Set it in the environment before starting the node:
-
 ```bash
 export OPENROUTER_API_KEY=sk-or-v1-...
 ```
 
-**opencode hangs on macOS**
+**"AgentField is not installed"**
 
-See section 2. Use the Python wrapper at `~/.opencode/bin/opencode` or run FORGE in a Linux container.
-
-**"Either repo_url or repo_path must be provided"**
-
-Every reasoner call needs one of these. If using `repo_url`, the repo is cloned to `$WORKSPACES_DIR/<repo-name>`.
-
-**Agent timeout (15 minutes default)**
-
-Increase `agent_timeout_seconds` in the config for large repos:
-
-```json
-{"config": {"agent_timeout_seconds": 1800}}
+You're in standalone mode. Use the CLI directly:
+```bash
+vibe2prod scan ./my-app
 ```
 
-**Structured output parse failures**
+Or install AgentField for platform mode:
+```bash
+pip install vibe2prod[platform]
+```
 
-The opencode provider logs stdout previews to the log file when JSON parsing fails. Check the agent's log file for `schema parse failed` events. Common cause: the coder model is too weak to produce valid JSON (minimax-m2.5 struggles with structured output -- use claude-haiku-4.5 or stronger for roles requiring JSON output).
+**Agent timeout (15 minutes default)**
+```bash
+# Via CLI: not yet configurable, increase in config dict
+# Via API: {"config": {"agent_timeout_seconds": 1800}}
+```
 
-### Crash Recovery (Checkpoint Resume)
+**opencode hangs (macOS development only)**
 
-FORGE automatically detects and resumes from the latest checkpoint on the next run against the same repo:
+The `opencode run` command can hang on macOS due to non-TTY detection. This does NOT affect production (Daytona/Linux). For local development on macOS, use the Python wrapper at `~/.opencode/bin/opencode`.
 
-1. Checkpoints are saved in `<repo>/.forge-checkpoints/`
-2. On the next `remediate` call for the same repo, FORGE finds the latest checkpoint and skips completed phases
-3. Resume order: validation > remediation > triage > discovery (most recent phase wins)
+**Crash recovery**
 
-To force a fresh run, delete the checkpoint directory:
-
+FORGE auto-resumes from the latest checkpoint. To force a fresh run:
 ```bash
 rm -rf /path/to/repo/.forge-checkpoints/
 ```
 
-### Worktree Cleanup
-
-FORGE cleans up worktrees automatically, but a hard crash may leave stale worktrees. To clean up manually:
-
+**Stale worktrees**
 ```bash
-# From within the repo directory:
-
-# Remove all FORGE worktrees
 rm -rf .forge-worktrees/
-
-# Prune stale git worktree references
 git worktree prune
-
-# Delete leftover FORGE branches
 git branch --list 'forge/fix-*' | xargs -r git branch -D
 ```
-
-If `git worktree remove` complains about a locked worktree, remove the lock file:
-
-```bash
-# Find and remove stale lock files
-find .git/worktrees -name "locked" -delete
-git worktree prune
-```
-
-### Log Levels
-
-FORGE uses Python's standard `logging` module. Set the log level via the root logger:
-
-```bash
-LOGLEVEL=DEBUG python -m forge
-```
-
-Or configure programmatically before starting the node.
 
 ---
 
 ## 8. Directory Layout (Runtime)
-
-After a full run, the repo will contain:
 
 ```
 <repo>/
@@ -396,18 +293,34 @@ After a full run, the repo will contain:
       forge-<run-id>.html
       forge-<run-id>.pdf        # if weasyprint installed
   .forge-checkpoints/           # cleared on success
-    discovery_complete.json
-    triage_complete.json
-    fix_progress.json
-    validation_complete.json
   .forge-worktrees/             # cleared after run
-    fix-<finding-id>/
 ```
 
 Add to `.gitignore`:
-
 ```
 .forge-checkpoints/
 .forge-worktrees/
 .artifacts/telemetry/
+```
+
+---
+
+## 9. Development
+
+### Local setup (macOS)
+
+```bash
+git clone https://github.com/christopher-igweze/forge-engine.git
+cd forge-engine
+pip install -e ".[dev]"          # standalone mode (no agentfield)
+pip install -e ".[platform,dev]" # platform mode (with agentfield)
+```
+
+### Run tests
+
+```bash
+pytest                            # unit + integration + golden
+pytest -m unit                    # unit tests only
+pytest -m "not live"              # skip live API tests
+FORGE_LIVE_TESTS=1 pytest -m live # run live E2E tests
 ```

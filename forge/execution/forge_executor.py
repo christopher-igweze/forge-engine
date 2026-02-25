@@ -18,7 +18,10 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
-from agentfield import Agent
+try:
+    from agentfield import Agent
+except ImportError:
+    from typing import Any as Agent  # Standalone: accepts StandaloneDispatcher
 
 from forge.execution.json_utils import safe_parse_agent_response
 from forge.schemas import (
