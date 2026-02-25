@@ -114,31 +114,76 @@ async def remediate(
 
         logger.info("FORGE remediate starting: %s", state.repo_path)
 
-        # ── Step 1: Discovery (Agents 1-4) ─────────────────────────────
-        discovery_result = await _run_discovery(
-            app, state, cfg, resolved,
+        # ── Check for resumable checkpoint ──────────────────────────────
+        from forge.execution.checkpoint import (
+            CheckpointPhase, save_checkpoint, get_latest_checkpoint,
+            restore_state, clear_checkpoints,
         )
-        state.total_agent_invocations += discovery_result["invocations"]
+        cp = get_latest_checkpoint(state.repo_path)
+        resume_phase = None
+        if cp and cp.forge_run_id:
+            logger.info("Resuming from checkpoint: %s (phase: %s)", cp.forge_run_id, cp.phase.value)
+            restored = restore_state(cp)
+            # Copy restored fields into state
+            state.forge_run_id = restored.forge_run_id
+            state.codebase_map = restored.codebase_map
+            state.security_findings = restored.security_findings
+            state.quality_findings = restored.quality_findings
+            state.architecture_findings = restored.architecture_findings
+            state.all_findings = restored.all_findings
+            state.triage_result = restored.triage_result
+            state.remediation_plan = restored.remediation_plan
+            state.completed_fixes = restored.completed_fixes
+            state.outer_loop = restored.outer_loop
+            state.integration_result = restored.integration_result
+            state.readiness_report = restored.readiness_report
+            state.total_agent_invocations = restored.total_agent_invocations
+            resume_phase = cp.phase
+
+        # ── Step 1: Discovery (Agents 1-4) ─────────────────────────────
+        if resume_phase not in (
+            CheckpointPhase.DISCOVERY, CheckpointPhase.TRIAGE,
+            CheckpointPhase.REMEDIATION, CheckpointPhase.VALIDATION,
+        ):
+            discovery_result = await _run_discovery(
+                app, state, cfg, resolved,
+            )
+            state.total_agent_invocations += discovery_result["invocations"]
+            save_checkpoint(state.repo_path, CheckpointPhase.DISCOVERY, state)
 
         # ── Step 2: Triage (Agents 5-6) ────────────────────────────────
-        triage_result = await _run_triage(
-            app, state, cfg, resolved, tier1_findings,
-        )
-        state.total_agent_invocations += triage_result["invocations"]
+        if resume_phase not in (
+            CheckpointPhase.TRIAGE, CheckpointPhase.REMEDIATION,
+            CheckpointPhase.VALIDATION,
+        ):
+            triage_result = await _run_triage(
+                app, state, cfg, resolved, tier1_findings,
+            )
+            state.total_agent_invocations += triage_result["invocations"]
+            save_checkpoint(state.repo_path, CheckpointPhase.TRIAGE, state)
 
         # ── Step 3: Remediation (Agents 7-10) ────────────────────────
         if cfg.mode in (ForgeMode.FULL, ForgeMode.REMEDIATION) and not cfg.dry_run:
-            remediation_result = await _run_remediation(
-                app, state, cfg, resolved,
-            )
-            state.total_agent_invocations += remediation_result["invocations"]
+            if resume_phase not in (
+                CheckpointPhase.REMEDIATION, CheckpointPhase.VALIDATION,
+            ):
+                remediation_result = await _run_remediation(
+                    app, state, cfg, resolved,
+                )
+                state.total_agent_invocations += remediation_result["invocations"]
+                save_checkpoint(state.repo_path, CheckpointPhase.REMEDIATION, state)
 
         # ── Step 4: Validation (Agents 11-12) ────────────────────────
         if cfg.mode in (ForgeMode.FULL, ForgeMode.VALIDATION) and not cfg.dry_run:
-            validation_result = await _run_validation(
-                app, state, cfg, resolved,
-            )
-            state.total_agent_invocations += validation_result["invocations"]
+            if resume_phase != CheckpointPhase.VALIDATION:
+                validation_result = await _run_validation(
+                    app, state, cfg, resolved,
+                )
+                state.total_agent_invocations += validation_result["invocations"]
+                save_checkpoint(state.repo_path, CheckpointPhase.VALIDATION, state)
+
+        # Clear checkpoints on successful completion
+        clear_checkpoints(state.repo_path)
 
         state.success = True
 
