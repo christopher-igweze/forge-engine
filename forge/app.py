@@ -115,11 +115,18 @@ async def remediate(
         repo_url=repo_url,
     )
 
-    # Initialize telemetry if learning is enabled
-    telemetry = None
-    if cfg.enable_learning:
-        from forge.execution.telemetry import ForgeTelemetry
+    # Initialize telemetry — reuse existing context (e.g. from test fixture)
+    # or create a new one.  Activating as contextvar means AgentAI.run()
+    # auto-logs every invocation without manual plumbing.
+    from forge.execution.telemetry import ForgeTelemetry
+    _outer = ForgeTelemetry.current()
+    if _outer is not None:
+        telemetry = _outer
+        _telemetry_ctx = None
+    else:
         telemetry = ForgeTelemetry(run_id=state.forge_run_id)
+        _telemetry_ctx = telemetry.activate()
+        _telemetry_ctx.__enter__()
 
     try:
         # ── Step 0: Resolve repo path ──────────────────────────────────
@@ -221,35 +228,42 @@ async def remediate(
             cleanup_all_worktrees(state.repo_path)
         except Exception as e:
             logger.warning("Worktree cleanup failed: %s", e)
+        # Deactivate telemetry context (only if we created it)
+        if _telemetry_ctx is not None:
+            _telemetry_ctx.__exit__(None, None, None)
 
     # Finalize
     elapsed = time.time() - start_time
 
-    # Flush telemetry: training data pairs + cost summary
-    if telemetry is not None:
-        telemetry.artifacts_dir = state.artifacts_dir
-        # Log training data for each completed fix
-        for fix in state.completed_fixes:
-            finding = next(
-                (f for f in state.all_findings if f.id == fix.finding_id), None,
+    # Flush telemetry: invocations auto-logged, add training data pairs
+    telemetry.artifacts_dir = state.artifacts_dir
+    for fix in state.completed_fixes:
+        finding = next(
+            (f for f in state.all_findings if f.id == fix.finding_id), None,
+        )
+        if finding:
+            inner = state.inner_loop_states.get(fix.finding_id)
+            telemetry.log_training_pair(
+                finding_id=finding.id,
+                category=finding.category.value,
+                severity=finding.severity.value,
+                title=finding.title,
+                description=finding.description,
+                tier=finding.tier.value if finding.tier is not None else 2,
+                outcome=fix.outcome.value,
+                summary=fix.summary,
+                files_changed=fix.files_changed,
+                retry_count=inner.iteration if inner else 1,
+                escalated=fix.finding_id in state.outer_loop.deferred_findings,
             )
-            if finding:
-                inner = state.inner_loop_states.get(fix.finding_id)
-                telemetry.log_training_pair(
-                    finding_id=finding.id,
-                    category=finding.category.value,
-                    severity=finding.severity.value,
-                    title=finding.title,
-                    description=finding.description,
-                    tier=finding.tier.value if finding.tier is not None else 2,
-                    outcome=fix.outcome.value,
-                    summary=fix.summary,
-                    files_changed=fix.files_changed,
-                    retry_count=inner.iteration if inner else 1,
-                    escalated=fix.finding_id in state.outer_loop.deferred_findings,
-                )
-        state.estimated_cost_usd = telemetry.total_cost
-        telemetry.flush()
+    state.estimated_cost_usd = telemetry.total_cost
+    telemetry.flush()
+
+    logger.info(
+        "Telemetry: $%.4f total, %d tokens, %d invocations",
+        telemetry.total_cost, telemetry.total_tokens, len(telemetry.invocations),
+    )
+
     state.finished_at = __import__("datetime").datetime.now(
         __import__("datetime").timezone.utc
     )
