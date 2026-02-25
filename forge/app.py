@@ -100,6 +100,12 @@ async def remediate(
         repo_url=repo_url,
     )
 
+    # Initialize telemetry if learning is enabled
+    telemetry = None
+    if cfg.enable_learning:
+        from forge.execution.telemetry import ForgeTelemetry
+        telemetry = ForgeTelemetry(run_id=state.forge_run_id)
+
     try:
         # ── Step 0: Resolve repo path ──────────────────────────────────
         state.repo_path = _resolve_repo_path(repo_url, repo_path or cfg.repo_path)
@@ -108,40 +114,118 @@ async def remediate(
 
         logger.info("FORGE remediate starting: %s", state.repo_path)
 
-        # ── Step 1: Discovery (Agents 1-4) ─────────────────────────────
-        discovery_result = await _run_discovery(
-            app, state, cfg, resolved,
+        # ── Check for resumable checkpoint ──────────────────────────────
+        from forge.execution.checkpoint import (
+            CheckpointPhase, save_checkpoint, get_latest_checkpoint,
+            restore_state, clear_checkpoints,
         )
-        state.total_agent_invocations += discovery_result["invocations"]
+        cp = get_latest_checkpoint(state.repo_path)
+        resume_phase = None
+        if cp and cp.forge_run_id:
+            logger.info("Resuming from checkpoint: %s (phase: %s)", cp.forge_run_id, cp.phase.value)
+            restored = restore_state(cp)
+            # Copy restored fields into state
+            state.forge_run_id = restored.forge_run_id
+            state.codebase_map = restored.codebase_map
+            state.security_findings = restored.security_findings
+            state.quality_findings = restored.quality_findings
+            state.architecture_findings = restored.architecture_findings
+            state.all_findings = restored.all_findings
+            state.triage_result = restored.triage_result
+            state.remediation_plan = restored.remediation_plan
+            state.completed_fixes = restored.completed_fixes
+            state.outer_loop = restored.outer_loop
+            state.integration_result = restored.integration_result
+            state.readiness_report = restored.readiness_report
+            state.total_agent_invocations = restored.total_agent_invocations
+            resume_phase = cp.phase
+
+        # ── Step 1: Discovery (Agents 1-4) ─────────────────────────────
+        if resume_phase not in (
+            CheckpointPhase.DISCOVERY, CheckpointPhase.TRIAGE,
+            CheckpointPhase.REMEDIATION, CheckpointPhase.VALIDATION,
+        ):
+            discovery_result = await _run_discovery(
+                app, state, cfg, resolved,
+            )
+            state.total_agent_invocations += discovery_result["invocations"]
+            save_checkpoint(state.repo_path, CheckpointPhase.DISCOVERY, state)
 
         # ── Step 2: Triage (Agents 5-6) ────────────────────────────────
-        triage_result = await _run_triage(
-            app, state, cfg, resolved, tier1_findings,
-        )
-        state.total_agent_invocations += triage_result["invocations"]
+        if resume_phase not in (
+            CheckpointPhase.TRIAGE, CheckpointPhase.REMEDIATION,
+            CheckpointPhase.VALIDATION,
+        ):
+            triage_result = await _run_triage(
+                app, state, cfg, resolved, tier1_findings,
+            )
+            state.total_agent_invocations += triage_result["invocations"]
+            save_checkpoint(state.repo_path, CheckpointPhase.TRIAGE, state)
 
         # ── Step 3: Remediation (Agents 7-10) ────────────────────────
         if cfg.mode in (ForgeMode.FULL, ForgeMode.REMEDIATION) and not cfg.dry_run:
-            remediation_result = await _run_remediation(
-                app, state, cfg, resolved,
-            )
-            state.total_agent_invocations += remediation_result["invocations"]
+            if resume_phase not in (
+                CheckpointPhase.REMEDIATION, CheckpointPhase.VALIDATION,
+            ):
+                remediation_result = await _run_remediation(
+                    app, state, cfg, resolved,
+                )
+                state.total_agent_invocations += remediation_result["invocations"]
+                save_checkpoint(state.repo_path, CheckpointPhase.REMEDIATION, state)
 
         # ── Step 4: Validation (Agents 11-12) ────────────────────────
         if cfg.mode in (ForgeMode.FULL, ForgeMode.VALIDATION) and not cfg.dry_run:
-            validation_result = await _run_validation(
-                app, state, cfg, resolved,
-            )
-            state.total_agent_invocations += validation_result["invocations"]
+            if resume_phase != CheckpointPhase.VALIDATION:
+                validation_result = await _run_validation(
+                    app, state, cfg, resolved,
+                )
+                state.total_agent_invocations += validation_result["invocations"]
+                save_checkpoint(state.repo_path, CheckpointPhase.VALIDATION, state)
+
+        # Clear checkpoints on successful completion
+        clear_checkpoints(state.repo_path)
 
         state.success = True
 
     except Exception as e:
         logger.exception("FORGE remediate failed: %s", e)
         state.success = False
+    finally:
+        # Clean up all FORGE worktrees
+        try:
+            from forge.execution.worktree import cleanup_all_worktrees
+            cleanup_all_worktrees(state.repo_path)
+        except Exception as e:
+            logger.warning("Worktree cleanup failed: %s", e)
 
     # Finalize
     elapsed = time.time() - start_time
+
+    # Flush telemetry: training data pairs + cost summary
+    if telemetry is not None:
+        telemetry.artifacts_dir = state.artifacts_dir
+        # Log training data for each completed fix
+        for fix in state.completed_fixes:
+            finding = next(
+                (f for f in state.all_findings if f.id == fix.finding_id), None,
+            )
+            if finding:
+                inner = state.inner_loop_states.get(fix.finding_id)
+                telemetry.log_training_pair(
+                    finding_id=finding.id,
+                    category=finding.category.value,
+                    severity=finding.severity.value,
+                    title=finding.title,
+                    description=finding.description,
+                    tier=finding.tier.value if finding.tier is not None else 2,
+                    outcome=fix.outcome.value,
+                    summary=fix.summary,
+                    files_changed=fix.files_changed,
+                    retry_count=inner.iteration if inner else 1,
+                    escalated=fix.finding_id in state.outer_loop.deferred_findings,
+                )
+        state.estimated_cost_usd = telemetry.total_cost
+        telemetry.flush()
     state.finished_at = __import__("datetime").datetime.now(
         __import__("datetime").timezone.utc
     )
@@ -193,6 +277,103 @@ async def scan(
 ) -> dict:
     """Scan alias for discover — produces readiness score without fixes."""
     return await discover(repo_url=repo_url, repo_path=repo_path, config=config)
+
+
+@app.reasoner()
+async def fix_single(
+    repo_path: str = "",
+    finding: dict | None = None,
+    codebase_map: dict | None = None,
+    config: dict | None = None,
+) -> dict:
+    """Fix a single finding — useful for iterative fixing or testing.
+
+    Takes a finding object (from a prior scan) and runs it through
+    the triage → coder → reviewer pipeline.
+    """
+    if not finding:
+        return {"success": False, "error": "No finding provided"}
+
+    cfg = ForgeConfig(**(config or {}))
+    resolved = cfg.resolved_models()
+
+    rp = repo_path or cfg.repo_path
+    if not rp:
+        return {"success": False, "error": "No repo_path provided"}
+
+    state = ForgeExecutionState(
+        mode=ForgeMode.REMEDIATION,
+        repo_path=rp,
+        artifacts_dir=os.path.join(rp, ".artifacts"),
+    )
+    os.makedirs(state.artifacts_dir, exist_ok=True)
+
+    # Parse the finding
+    audit_finding = AuditFinding(**finding)
+    state.all_findings = [audit_finding]
+
+    # Parse codebase map if provided
+    if codebase_map:
+        from forge.schemas import CodebaseMap
+        state.codebase_map = CodebaseMap(**codebase_map)
+
+    # Run triage on the single finding
+    triage_dict = await app.call(
+        f"{NODE_ID}.run_triage_classifier",
+        findings=[finding],
+        codebase_map=codebase_map or {},
+        artifacts_dir=state.artifacts_dir,
+        model=resolved.get("triage_classifier_model", "anthropic/claude-haiku-4.5"),
+        ai_provider=cfg.provider_for_role("triage_classifier"),
+    )
+
+    # Determine tier from triage
+    from forge.schemas import RemediationItem, RemediationTier, TriageResult
+    tier = RemediationTier.TIER_2  # default
+    if isinstance(triage_dict, dict):
+        triage = TriageResult(**triage_dict)
+        if triage.decisions:
+            tier = triage.decisions[0].tier
+
+    # Build a minimal remediation plan
+    item = RemediationItem(
+        finding_id=audit_finding.id,
+        title=audit_finding.title,
+        tier=tier,
+        priority=1,
+    )
+    plan = RemediationPlan(
+        items=[item],
+        execution_levels=[[audit_finding.id]],
+        total_items=1,
+    )
+    state.remediation_plan = plan
+
+    # Run through remediation (tier router + control loops)
+    from forge.execution.tier_router import route_plan_items
+    from forge.execution.forge_executor import execute_remediation
+
+    handled, ai_items = route_plan_items(plan, [audit_finding], state, rp, cfg)
+
+    if ai_items:
+        ai_plan = RemediationPlan(
+            items=ai_items,
+            execution_levels=[[ai_items[0].finding_id]],
+            total_items=len(ai_items),
+        )
+        state.remediation_plan = ai_plan
+        await execute_remediation(app, NODE_ID, state, cfg, resolved)
+
+    # Build result
+    fix_result = state.completed_fixes[0] if state.completed_fixes else None
+    return {
+        "success": bool(fix_result and fix_result.outcome.value in ("completed", "skipped")),
+        "finding_id": audit_finding.id,
+        "tier": tier.value,
+        "outcome": fix_result.outcome.value if fix_result else "no_fix",
+        "summary": fix_result.summary if fix_result else "No fix produced",
+        "files_changed": fix_result.files_changed if fix_result else [],
+    }
 
 
 # ── Internal Pipeline Stages ─────────────────────────────────────────
@@ -496,6 +677,19 @@ async def _run_validation(
         invocations += 1
     except Exception as e:
         logger.error("Debt tracker failed: %s", e)
+
+    # Generate formatted reports (JSON + HTML + PDF if weasyprint available)
+    if state.readiness_report:
+        try:
+            from forge.execution.report import generate_reports
+            report_paths = generate_reports(
+                state.readiness_report,
+                state.artifacts_dir,
+                run_id=state.forge_run_id,
+            )
+            logger.info("Reports generated: %s", ", ".join(report_paths.keys()))
+        except Exception as e:
+            logger.error("Report generation failed: %s", e)
 
     logger.info(
         "Validation complete: integration=%s, readiness_score=%d",

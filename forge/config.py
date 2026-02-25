@@ -90,6 +90,7 @@ class ForgeConfig(BaseModel):
     enable_tier0_autofix: bool = True
     enable_tier1_rules: bool = True
     enable_parallel_audit: bool = True  # Run audit passes concurrently
+    enable_learning: bool = True  # Log training data for fine-tuning flywheel
 
     repo_url: str = ""
     repo_path: str = ""

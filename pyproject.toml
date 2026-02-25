@@ -1,6 +1,6 @@
 [project]
 name = "forge-engine"
-version = "0.1.0"
+version = "0.2.0"
 description = "FORGE: Framework for Orchestrated Remediation & Governance Engine"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -12,6 +12,7 @@ dependencies = [
 
 [project.optional-dependencies]
 claude = ["claude-agent-sdk>=0.1.20"]
+pdf = ["weasyprint>=60.0"]
 
 [project.scripts]
 forge-engine = "forge.__main__:main"

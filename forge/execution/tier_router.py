@@ -25,7 +25,7 @@ from forge.schemas import (
 
 if TYPE_CHECKING:
     from forge.config import ForgeConfig
-    from forge.schemas import ForgeExecutionState, TriageResult
+    from forge.schemas import ForgeExecutionState
 
 logger = logging.getLogger(__name__)
 
@@ -273,17 +273,44 @@ def _tier1_replace_secret(finding: AuditFinding, repo_path: str) -> CoderFixResu
 
 
 def _tier1_add_rate_limiter(finding: AuditFinding, repo_path: str) -> CoderFixResult:
-    """Add rate limiting to an API route.
+    """Add rate limiting middleware to an API route.
 
-    Phase 2: Logs the action — actual implementation needs framework detection.
-    Phase 3: Full framework-aware rate limiter injection (Express, FastAPI, etc).
+    Detects the framework (Express, FastAPI, Flask) and injects the
+    appropriate rate-limiting middleware/dependency.
     """
-    logger.info("Tier 1 rate limiter: %s (stub — full impl in Phase 3)", finding.id)
+    import os
+
+    files_changed: list[str] = []
+    framework = _detect_framework(repo_path)
+
+    if framework == "express":
+        files_changed = _add_express_rate_limiter(repo_path, finding)
+    elif framework == "fastapi":
+        files_changed = _add_fastapi_rate_limiter(repo_path, finding)
+    elif framework == "flask":
+        files_changed = _add_flask_rate_limiter(repo_path, finding)
+    else:
+        logger.info("Tier 1 rate limiter: unknown framework — deferring to Tier 2")
+        return CoderFixResult(
+            finding_id=finding.id,
+            outcome=FixOutcome.FAILED_RETRYABLE,
+            summary=f"Rate limiter: could not detect framework (got '{framework}')",
+            error_message="Promoting to Tier 2 for AI-assisted fix",
+        )
+
+    if files_changed:
+        return CoderFixResult(
+            finding_id=finding.id,
+            outcome=FixOutcome.COMPLETED,
+            files_changed=files_changed,
+            summary=f"Added {framework} rate limiting middleware in {len(files_changed)} file(s)",
+        )
+
     return CoderFixResult(
         finding_id=finding.id,
         outcome=FixOutcome.FAILED_RETRYABLE,
-        summary="Rate limiter template requires framework detection (Phase 3)",
-        error_message="Promoting to Tier 2 for AI-assisted fix",
+        summary=f"Rate limiter injection failed for {framework}",
+        error_message="Could not find suitable injection point",
     )
 
 
@@ -345,15 +372,457 @@ def _tier1_create_env_example(finding: AuditFinding, repo_path: str) -> CoderFix
 
 
 def _tier1_add_error_boundary(finding: AuditFinding, repo_path: str) -> CoderFixResult:
-    """Add React ErrorBoundary wrapper.
+    """Add React ErrorBoundary component and wrap the root app.
 
-    Phase 2: Logs the action — actual implementation needs JSX/TSX parsing.
-    Phase 3: Full AST-aware ErrorBoundary injection.
+    Creates an ErrorBoundary component if none exists and wraps the
+    main App export in the nearest entry point (App.tsx/App.jsx).
     """
-    logger.info("Tier 1 error boundary: %s (stub — full impl in Phase 3)", finding.id)
+    import os
+    import re
+
+    files_changed: list[str] = []
+
+    # Find the React source directory
+    src_dir = _find_react_src(repo_path)
+    if not src_dir:
+        return CoderFixResult(
+            finding_id=finding.id,
+            outcome=FixOutcome.FAILED_RETRYABLE,
+            summary="Could not find React source directory",
+            error_message="Promoting to Tier 2 for AI-assisted fix",
+        )
+
+    # Create ErrorBoundary component if it doesn't exist
+    boundary_path = None
+    for ext in (".tsx", ".jsx", ".js"):
+        candidate = os.path.join(src_dir, "components", f"ErrorBoundary{ext}")
+        if os.path.isfile(candidate):
+            boundary_path = candidate
+            break
+
+    if not boundary_path:
+        # Determine if project uses TypeScript
+        is_ts = any(
+            f.endswith(".tsx") or f.endswith(".ts")
+            for f in os.listdir(src_dir)
+            if os.path.isfile(os.path.join(src_dir, f))
+        )
+        ext = ".tsx" if is_ts else ".jsx"
+        comp_dir = os.path.join(src_dir, "components")
+        os.makedirs(comp_dir, exist_ok=True)
+        boundary_path = os.path.join(comp_dir, f"ErrorBoundary{ext}")
+
+        boundary_code = _ERROR_BOUNDARY_TSX if is_ts else _ERROR_BOUNDARY_JSX
+        with open(boundary_path, "w") as f:
+            f.write(boundary_code)
+        rel = os.path.relpath(boundary_path, repo_path)
+        files_changed.append(rel)
+        logger.info("Created ErrorBoundary component: %s", rel)
+
+    # Find and wrap the App component
+    app_file = None
+    for name in ("App.tsx", "App.jsx", "App.js", "app.tsx", "app.jsx"):
+        candidate = os.path.join(src_dir, name)
+        if os.path.isfile(candidate):
+            app_file = candidate
+            break
+
+    if app_file:
+        with open(app_file, "r") as f:
+            content = f.read()
+
+        if "ErrorBoundary" not in content:
+            # Add import
+            import_line = 'import ErrorBoundary from "./components/ErrorBoundary";\n'
+
+            # Insert after the last import
+            last_import = 0
+            for m in re.finditer(r'^import\s+.+;?\s*$', content, re.MULTILINE):
+                last_import = m.end()
+
+            if last_import > 0:
+                content = content[:last_import] + "\n" + import_line + content[last_import:]
+            else:
+                content = import_line + content
+
+            # Wrap the default export's JSX return
+            # Look for: return ( ... ) or return <...>
+            content = re.sub(
+                r'(return\s*\(\s*\n?)(\s*)(<)',
+                r'\1\2<ErrorBoundary>\n\2\3',
+                content,
+                count=1,
+            )
+            # Close the wrapper before the closing paren
+            content = re.sub(
+                r'(\n)(\s*)(\)\s*;?\s*})',
+                r'\1\2  </ErrorBoundary>\n\2\3',
+                content,
+                count=1,
+            )
+
+            with open(app_file, "w") as f:
+                f.write(content)
+            rel = os.path.relpath(app_file, repo_path)
+            files_changed.append(rel)
+
+    if files_changed:
+        return CoderFixResult(
+            finding_id=finding.id,
+            outcome=FixOutcome.COMPLETED,
+            files_changed=files_changed,
+            summary=f"Added ErrorBoundary component and wrapped App in {len(files_changed)} file(s)",
+        )
+
     return CoderFixResult(
         finding_id=finding.id,
         outcome=FixOutcome.FAILED_RETRYABLE,
-        summary="Error boundary template requires JSX parsing (Phase 3)",
+        summary="Could not inject ErrorBoundary — no suitable App component found",
         error_message="Promoting to Tier 2 for AI-assisted fix",
     )
+
+
+# ── Framework Detection & Rate Limiter Helpers ────────────────────────
+
+
+def _detect_framework(repo_path: str) -> str:
+    """Detect the primary backend framework from package manifests."""
+    import json
+    import os
+
+    # Check package.json for Node.js frameworks
+    pkg_json = os.path.join(repo_path, "package.json")
+    if os.path.isfile(pkg_json):
+        try:
+            with open(pkg_json) as f:
+                pkg = json.load(f)
+            deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+            if "express" in deps:
+                return "express"
+            if "fastify" in deps:
+                return "express"  # Similar middleware pattern
+            if "koa" in deps:
+                return "express"  # Similar enough
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # Check pyproject.toml / requirements.txt for Python frameworks
+    for req_file in ("pyproject.toml", "requirements.txt"):
+        req_path = os.path.join(repo_path, req_file)
+        if os.path.isfile(req_path):
+            try:
+                content = open(req_path).read().lower()
+                if "fastapi" in content:
+                    return "fastapi"
+                if "flask" in content:
+                    return "flask"
+                if "django" in content:
+                    return "flask"  # Similar middleware pattern
+            except OSError:
+                pass
+
+    return "unknown"
+
+
+def _add_express_rate_limiter(repo_path: str, finding: AuditFinding) -> list[str]:
+    """Inject express-rate-limit middleware into an Express app."""
+    import os
+    import re
+
+    files_changed: list[str] = []
+
+    # Find the main Express app file
+    candidates = [
+        "src/app.js", "src/app.ts", "src/index.js", "src/index.ts",
+        "app.js", "app.ts", "index.js", "index.ts",
+        "server.js", "server.ts", "src/server.js", "src/server.ts",
+    ]
+    app_file = None
+    for c in candidates:
+        full = os.path.join(repo_path, c)
+        if os.path.isfile(full):
+            app_file = full
+            break
+
+    if not app_file:
+        return []
+
+    with open(app_file, "r") as f:
+        content = f.read()
+
+    if "rateLimit" in content or "rate-limit" in content or "rateLimiter" in content:
+        return []  # Already has rate limiting
+
+    # Add import and middleware
+    rate_limit_import = 'const rateLimit = require("express-rate-limit");\n'
+    rate_limit_middleware = """
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per window
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests, please try again later." },
+});
+"""
+
+    # Insert import after existing requires/imports
+    last_import = 0
+    for m in re.finditer(
+        r'^(?:const|let|var|import)\s+.+(?:require|from).+$',
+        content, re.MULTILINE,
+    ):
+        last_import = m.end()
+
+    if last_import > 0:
+        content = (
+            content[:last_import] + "\n" + rate_limit_import +
+            rate_limit_middleware + content[last_import:]
+        )
+    else:
+        content = rate_limit_import + rate_limit_middleware + "\n" + content
+
+    # Add app.use(limiter) after app creation
+    app_use_pattern = re.search(
+        r'((?:const|let|var)\s+app\s*=\s*express\(\).*?;)',
+        content,
+    )
+    if app_use_pattern:
+        insert_pos = app_use_pattern.end()
+        content = content[:insert_pos] + "\napp.use(limiter);\n" + content[insert_pos:]
+
+    with open(app_file, "w") as f:
+        f.write(content)
+
+    rel = os.path.relpath(app_file, repo_path)
+    files_changed.append(rel)
+    return files_changed
+
+
+def _add_fastapi_rate_limiter(repo_path: str, finding: AuditFinding) -> list[str]:
+    """Add slowapi rate limiting to a FastAPI app."""
+    import os
+    import re
+
+    files_changed: list[str] = []
+
+    candidates = [
+        "src/main.py", "main.py", "app/main.py", "src/app.py", "app.py",
+    ]
+    app_file = None
+    for c in candidates:
+        full = os.path.join(repo_path, c)
+        if os.path.isfile(full):
+            app_file = full
+            break
+
+    if not app_file:
+        return []
+
+    with open(app_file, "r") as f:
+        content = f.read()
+
+    if "slowapi" in content or "RateLimiter" in content:
+        return []
+
+    rate_limit_code = (
+        "from slowapi import Limiter, _rate_limit_exceeded_handler\n"
+        "from slowapi.util import get_remote_address\n"
+        "from slowapi.errors import RateLimitExceeded\n"
+    )
+
+    setup_code = (
+        '\nlimiter = Limiter(key_func=get_remote_address, default_limits=["100/15minutes"])\n'
+    )
+
+    # Insert imports at top
+    last_import = 0
+    for m in re.finditer(r'^(?:from|import)\s+.+$', content, re.MULTILINE):
+        last_import = m.end()
+
+    if last_import > 0:
+        content = content[:last_import] + "\n" + rate_limit_code + content[last_import:]
+    else:
+        content = rate_limit_code + content
+
+    # Add limiter setup after app creation
+    app_pattern = re.search(r'(app\s*=\s*FastAPI\(.+?\))', content, re.DOTALL)
+    if app_pattern:
+        insert_pos = app_pattern.end()
+        attach_code = (
+            setup_code +
+            "app.state.limiter = limiter\n"
+            "app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)\n"
+        )
+        content = content[:insert_pos] + attach_code + content[insert_pos:]
+
+    with open(app_file, "w") as f:
+        f.write(content)
+
+    rel = os.path.relpath(app_file, repo_path)
+    files_changed.append(rel)
+    return files_changed
+
+
+def _add_flask_rate_limiter(repo_path: str, finding: AuditFinding) -> list[str]:
+    """Add Flask-Limiter to a Flask app."""
+    import os
+    import re
+
+    files_changed: list[str] = []
+
+    candidates = [
+        "src/app.py", "app.py", "src/main.py", "main.py", "app/__init__.py",
+    ]
+    app_file = None
+    for c in candidates:
+        full = os.path.join(repo_path, c)
+        if os.path.isfile(full):
+            app_file = full
+            break
+
+    if not app_file:
+        return []
+
+    with open(app_file, "r") as f:
+        content = f.read()
+
+    if "flask_limiter" in content or "Limiter" in content:
+        return []
+
+    import_line = "from flask_limiter import Limiter\nfrom flask_limiter.util import get_remote_address\n"
+
+    last_import = 0
+    for m in re.finditer(r'^(?:from|import)\s+.+$', content, re.MULTILINE):
+        last_import = m.end()
+
+    if last_import > 0:
+        content = content[:last_import] + "\n" + import_line + content[last_import:]
+    else:
+        content = import_line + content
+
+    # Add limiter after app creation
+    app_pattern = re.search(r'(app\s*=\s*Flask\(.+?\))', content)
+    if app_pattern:
+        insert_pos = app_pattern.end()
+        setup = (
+            '\nlimiter = Limiter(\n'
+            '    get_remote_address,\n'
+            '    app=app,\n'
+            '    default_limits=["100 per 15 minutes"],\n'
+            '    storage_uri="memory://",\n'
+            ')\n'
+        )
+        content = content[:insert_pos] + setup + content[insert_pos:]
+
+    with open(app_file, "w") as f:
+        f.write(content)
+
+    rel = os.path.relpath(app_file, repo_path)
+    files_changed.append(rel)
+    return files_changed
+
+
+def _find_react_src(repo_path: str) -> str | None:
+    """Find the React source directory."""
+    import os
+
+    candidates = [
+        os.path.join(repo_path, "src"),
+        os.path.join(repo_path, "app"),
+        os.path.join(repo_path, "client", "src"),
+        os.path.join(repo_path, "frontend", "src"),
+    ]
+    for d in candidates:
+        if os.path.isdir(d):
+            # Verify it looks like React (has .jsx/.tsx files)
+            for f in os.listdir(d):
+                if f.endswith((".jsx", ".tsx")):
+                    return d
+    return None
+
+
+# ── Error Boundary Templates ─────────────────────────────────────────
+
+_ERROR_BOUNDARY_TSX = '''import React, { Component, ErrorInfo, ReactNode } from "react";
+
+interface Props {
+  children: ReactNode;
+  fallback?: ReactNode;
+}
+
+interface State {
+  hasError: boolean;
+  error: Error | null;
+}
+
+class ErrorBoundary extends Component<Props, State> {
+  constructor(props: Props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error): State {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
+    console.error("ErrorBoundary caught an error:", error, errorInfo);
+  }
+
+  render(): ReactNode {
+    if (this.state.hasError) {
+      return (
+        this.props.fallback || (
+          <div style={{ padding: "2rem", textAlign: "center" }}>
+            <h2>Something went wrong</h2>
+            <p>Please refresh the page or try again later.</p>
+            <button onClick={() => this.setState({ hasError: false, error: null })}>
+              Try Again
+            </button>
+          </div>
+        )
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export default ErrorBoundary;
+'''
+
+_ERROR_BOUNDARY_JSX = '''import React, { Component } from "react";
+
+class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error("ErrorBoundary caught an error:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        this.props.fallback || (
+          <div style={{ padding: "2rem", textAlign: "center" }}>
+            <h2>Something went wrong</h2>
+            <p>Please refresh the page or try again later.</p>
+            <button onClick={() => this.setState({ hasError: false, error: null })}>
+              Try Again
+            </button>
+          </div>
+        )
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export default ErrorBoundary;
+'''
