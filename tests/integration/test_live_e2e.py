@@ -1,21 +1,20 @@
 """Live E2E integration tests for FORGE engine.
 
 These tests run the actual FORGE pipeline against real golden codebases,
-using a live AgentField server and real LLM APIs via OpenRouter.
+using real LLM APIs via OpenRouter in standalone mode (no AgentField server).
 
 Requires:
-  - AgentField server running (AGENTFIELD_SERVER env var)
   - OpenRouter API key (OPENROUTER_API_KEY env var)
   - pytest --run-live flag or FORGE_LIVE_TESTS=1
 
 Usage:
-  pytest tests/integration/test_live_e2e.py --run-live -v
+  OPENROUTER_API_KEY=sk-or-... pytest tests/integration/test_live_e2e.py --run-live -v
   FORGE_LIVE_TESTS=1 pytest tests/integration/test_live_e2e.py -v
 
 Each test:
   1. Copies a golden codebase to a temporary directory
   2. Initializes a git repo in the copy (so FORGE can branch/commit)
-  3. Calls the FORGE app reasoner
+  3. Calls the FORGE pipeline via StandaloneDispatcher
   4. Asserts on structural properties of the ForgeResult (not exact LLM output)
 """
 
@@ -75,14 +74,6 @@ def _copy_golden_codebase(name: str, dest: Path) -> Path:
     return repo
 
 
-def _parse_forge_result(raw: dict) -> ForgeResult:
-    """Parse a raw dict into a ForgeResult, failing the test if invalid."""
-    try:
-        return ForgeResult(**raw)
-    except Exception as exc:
-        pytest.fail(f"Failed to parse ForgeResult: {exc}\nRaw: {raw}")
-
-
 def _make_live_config(overrides: dict | None = None) -> dict:
     """Build a minimal config dict for live tests.
 
@@ -98,6 +89,126 @@ def _make_live_config(overrides: dict | None = None) -> dict:
     return cfg
 
 
+def _skip_unless_openrouter():
+    """Skip if OPENROUTER_API_KEY is not set."""
+    if not os.environ.get("OPENROUTER_API_KEY"):
+        pytest.skip("Requires OPENROUTER_API_KEY env var")
+
+
+async def _run_discover(repo_path: str, config: dict) -> ForgeResult:
+    """Run discovery via StandaloneDispatcher (no AgentField required)."""
+    from forge.standalone import run_standalone
+
+    cfg = dict(config)
+    cfg["mode"] = "discovery"
+    cfg["dry_run"] = True
+    return await run_standalone(repo_path=repo_path, config=cfg)
+
+
+async def _run_remediate(repo_path: str, config: dict) -> ForgeResult:
+    """Run full remediation via StandaloneDispatcher."""
+    from forge.standalone import run_standalone
+
+    return await run_standalone(repo_path=repo_path, config=config)
+
+
+async def _run_fix_single(
+    repo_path: str,
+    finding: dict,
+    config: dict,
+) -> dict:
+    """Run fix_single via StandaloneDispatcher (standalone equivalent).
+
+    Mirrors forge.app.fix_single but uses StandaloneDispatcher.call()
+    instead of AgentField app.call().
+    """
+    from forge.standalone import StandaloneDispatcher
+    from forge.config import ForgeConfig
+    from forge.schemas import (
+        AuditFinding,
+        ForgeExecutionState,
+        RemediationItem,
+        RemediationPlan,
+        RemediationTier,
+        TriageResult,
+    )
+
+    cfg = ForgeConfig(**(config or {}))
+    resolved = cfg.resolved_models()
+    dispatcher = StandaloneDispatcher()
+    node_id = dispatcher.node_id
+
+    state = ForgeExecutionState(
+        mode=ForgeMode.REMEDIATION,
+        repo_path=repo_path,
+        artifacts_dir=os.path.join(repo_path, ".artifacts"),
+    )
+    os.makedirs(state.artifacts_dir, exist_ok=True)
+
+    audit_finding = AuditFinding(**finding)
+    state.all_findings = [audit_finding]
+
+    # Run triage on the single finding
+    triage_dict = await dispatcher.call(
+        f"{node_id}.run_triage_classifier",
+        findings=[finding],
+        codebase_map={},
+        artifacts_dir=state.artifacts_dir,
+        model=resolved.get("triage_classifier_model", "anthropic/claude-haiku-4.5"),
+        ai_provider=cfg.provider_for_role("triage_classifier"),
+    )
+
+    # Determine tier from triage
+    tier = RemediationTier.TIER_2  # default
+    if isinstance(triage_dict, dict):
+        try:
+            triage = TriageResult(**triage_dict)
+            if triage.decisions:
+                tier = triage.decisions[0].tier
+        except Exception:
+            pass
+
+    # Build a minimal remediation plan
+    item = RemediationItem(
+        finding_id=audit_finding.id,
+        title=audit_finding.title,
+        tier=tier,
+        priority=1,
+    )
+    plan = RemediationPlan(
+        items=[item],
+        execution_levels=[[audit_finding.id]],
+        total_items=1,
+    )
+    state.remediation_plan = plan
+
+    # Run through remediation (tier router + control loops)
+    from forge.execution.tier_router import route_plan_items
+    from forge.execution.forge_executor import execute_remediation
+
+    handled, ai_items = route_plan_items(plan, [audit_finding], state, repo_path, cfg)
+
+    if ai_items:
+        ai_plan = RemediationPlan(
+            items=ai_items,
+            execution_levels=[[ai_items[0].finding_id]],
+            total_items=len(ai_items),
+        )
+        state.remediation_plan = ai_plan
+        await execute_remediation(dispatcher, node_id, state, cfg, resolved)
+
+    # Build result
+    fix_result = state.completed_fixes[0] if state.completed_fixes else None
+    return {
+        "success": bool(fix_result and fix_result.outcome.value in ("completed", "skipped")),
+        "finding_id": audit_finding.id,
+        "tier": tier.value,
+        "outcome": fix_result.outcome.value if fix_result else "no_fix",
+        "summary": fix_result.summary if fix_result else "No fix produced",
+        "files_changed": fix_result.files_changed if fix_result else [],
+    }
+
+
 # ── Discovery Tests ──────────────────────────────────────────────────
 
 
@@ -111,7 +222,7 @@ class TestLiveDiscovery:
     """
 
     @pytest.mark.timeout(DISCOVERY_TIMEOUT)
-    async def test_discover_express_api(self, skip_unless_live, tmp_path):
+    async def test_discover_express_api(self, tmp_path):
         """Run discovery on the express_api_nosec golden codebase.
 
         The express_api_nosec codebase contains:
@@ -123,17 +234,12 @@ class TestLiveDiscovery:
 
         We expect the discovery pipeline to find security issues.
         """
-        from forge.app import discover
+        _skip_unless_openrouter()
 
         repo = _copy_golden_codebase("express_api_nosec", tmp_path)
         config = _make_live_config({"mode": "discovery", "dry_run": True})
 
-        raw = await discover(
-            repo_path=str(repo),
-            config=config,
-        )
-
-        result = _parse_forge_result(raw)
+        result = await _run_discover(repo_path=str(repo), config=config)
 
         # Structural assertions -- not testing exact LLM output
         assert result.success is True, f"Discovery should succeed: {result.summary}"
@@ -148,12 +254,8 @@ class TestLiveDiscovery:
         assert result.duration_seconds > 0
         assert result.forge_run_id, "Every run must have an ID"
 
-        # Readiness report is NOT produced in discovery-only mode
-        # (it requires the validation phase, agents 11-12)
-        # The remediation plan may or may not exist depending on triage
-
     @pytest.mark.timeout(DISCOVERY_TIMEOUT)
-    async def test_discover_flask_secrets(self, skip_unless_live, tmp_path):
+    async def test_discover_flask_secrets(self, tmp_path):
         """Run discovery on flask_exposed_secrets golden codebase.
 
         The flask_exposed_secrets codebase contains:
@@ -166,17 +268,12 @@ class TestLiveDiscovery:
         We expect the discovery pipeline to flag at least the hardcoded
         secret and debug mode.
         """
-        from forge.app import discover
+        _skip_unless_openrouter()
 
         repo = _copy_golden_codebase("flask_exposed_secrets", tmp_path)
         config = _make_live_config({"mode": "discovery", "dry_run": True})
 
-        raw = await discover(
-            repo_path=str(repo),
-            config=config,
-        )
-
-        result = _parse_forge_result(raw)
+        result = await _run_discover(repo_path=str(repo), config=config)
 
         assert result.success is True, f"Discovery should succeed: {result.summary}"
         assert result.mode == ForgeMode.DISCOVERY
@@ -187,22 +284,17 @@ class TestLiveDiscovery:
         assert result.findings_fixed == 0, "Discovery mode should not fix anything"
 
     @pytest.mark.timeout(DISCOVERY_TIMEOUT)
-    async def test_discover_fastapi_monolith(self, skip_unless_live, tmp_path):
+    async def test_discover_fastapi_monolith(self, tmp_path):
         """Run discovery on fastapi_monolith golden codebase.
 
         Tests that the pipeline handles a Python FastAPI project.
         """
-        from forge.app import discover
+        _skip_unless_openrouter()
 
         repo = _copy_golden_codebase("fastapi_monolith", tmp_path)
         config = _make_live_config({"mode": "discovery", "dry_run": True})
 
-        raw = await discover(
-            repo_path=str(repo),
-            config=config,
-        )
-
-        result = _parse_forge_result(raw)
+        result = await _run_discover(repo_path=str(repo), config=config)
 
         assert result.success is True, f"Discovery should succeed: {result.summary}"
         assert result.total_findings >= 0  # may find issues, may not -- structural check
@@ -221,22 +313,17 @@ class TestLiveScan:
     """
 
     @pytest.mark.timeout(SCAN_TIMEOUT)
-    async def test_scan_returns_findings(self, skip_unless_live, tmp_path):
+    async def test_scan_returns_findings(self, tmp_path):
         """Scan should return findings without applying fixes.
 
         Uses the express_api_nosec codebase which has guaranteed security flaws.
         """
-        from forge.app import scan
+        _skip_unless_openrouter()
 
         repo = _copy_golden_codebase("express_api_nosec", tmp_path)
         config = _make_live_config()
 
-        raw = await scan(
-            repo_path=str(repo),
-            config=config,
-        )
-
-        result = _parse_forge_result(raw)
+        result = await _run_discover(repo_path=str(repo), config=config)
 
         assert result.success is True, f"Scan should succeed: {result.summary}"
         # scan delegates to discover, which sets mode = discovery
@@ -247,24 +334,19 @@ class TestLiveScan:
         assert result.duration_seconds > 0
 
     @pytest.mark.timeout(SCAN_TIMEOUT)
-    async def test_scan_react_app(self, skip_unless_live, tmp_path):
+    async def test_scan_react_app(self, tmp_path):
         """Scan a React/TypeScript codebase (react_app_noerror).
 
         This codebase has quality issues (no error boundaries, no loading
         states) but may not have critical security issues. We assert the
         pipeline runs to completion regardless.
         """
-        from forge.app import scan
+        _skip_unless_openrouter()
 
         repo = _copy_golden_codebase("react_app_noerror", tmp_path)
         config = _make_live_config()
 
-        raw = await scan(
-            repo_path=str(repo),
-            config=config,
-        )
-
-        result = _parse_forge_result(raw)
+        result = await _run_discover(repo_path=str(repo), config=config)
 
         assert result.success is True, f"Scan should succeed: {result.summary}"
         assert result.findings_fixed == 0, "Scan must not apply fixes"
@@ -282,14 +364,14 @@ class TestLiveFixSingle:
     """
 
     @pytest.mark.timeout(FIX_SINGLE_TIMEOUT)
-    async def test_fix_hardcoded_secret(self, skip_unless_live, tmp_path):
+    async def test_fix_hardcoded_secret(self, tmp_path):
         """Fix a single hardcoded secret finding.
 
         Creates a minimal file with a hardcoded API key, constructs a
         finding dict pointing at it, and calls fix_single. The coder
         agent should replace the hardcoded value with an env var lookup.
         """
-        from forge.app import fix_single
+        _skip_unless_openrouter()
 
         # Set up a minimal repo with a hardcoded secret
         repo = tmp_path / "secret-repo"
@@ -339,7 +421,7 @@ class TestLiveFixSingle:
 
         config = _make_live_config()
 
-        raw = await fix_single(
+        raw = await _run_fix_single(
             repo_path=str(repo),
             finding=finding,
             config=config,
@@ -366,13 +448,13 @@ class TestLiveFixSingle:
             )
 
     @pytest.mark.timeout(FIX_SINGLE_TIMEOUT)
-    async def test_fix_sql_injection(self, skip_unless_live, tmp_path):
+    async def test_fix_sql_injection(self, tmp_path):
         """Fix a SQL injection finding in a Node.js file.
 
         Creates a minimal file with string-concatenated SQL, then asks
         FORGE to fix it via parameterized queries.
         """
-        from forge.app import fix_single
+        _skip_unless_openrouter()
 
         repo = tmp_path / "sqli-repo"
         repo.mkdir()
@@ -429,7 +511,7 @@ class TestLiveFixSingle:
 
         config = _make_live_config()
 
-        raw = await fix_single(
+        raw = await _run_fix_single(
             repo_path=str(repo),
             finding=finding,
             config=config,
@@ -459,7 +541,7 @@ class TestLiveRemediate:
     """
 
     @pytest.mark.timeout(REMEDIATE_TIMEOUT)
-    async def test_full_pipeline_express_api(self, skip_unless_live, tmp_path):
+    async def test_full_pipeline_express_api(self, tmp_path):
         """Run full remediation on express_api_nosec.
 
         This is the comprehensive test -- exercises all 12 agents:
@@ -470,7 +552,7 @@ class TestLiveRemediate:
 
         We assert on the structural shape of the result, not exact fixes.
         """
-        from forge.app import remediate
+        _skip_unless_openrouter()
 
         repo = _copy_golden_codebase("express_api_nosec", tmp_path)
         config = _make_live_config({
@@ -481,12 +563,7 @@ class TestLiveRemediate:
             "max_outer_replans": 0,     # no replanning in tests
         })
 
-        raw = await remediate(
-            repo_path=str(repo),
-            config=config,
-        )
-
-        result = _parse_forge_result(raw)
+        result = await _run_remediate(repo_path=str(repo), config=config)
 
         # The pipeline should complete (success=True means no unhandled exceptions)
         assert result.success is True, f"Full pipeline failed: {result.summary}"
@@ -526,13 +603,13 @@ class TestLiveRemediate:
             assert isinstance(report.summary, str)
 
     @pytest.mark.timeout(REMEDIATE_TIMEOUT)
-    async def test_full_pipeline_flask_secrets(self, skip_unless_live, tmp_path):
+    async def test_full_pipeline_flask_secrets(self, tmp_path):
         """Run full remediation on flask_exposed_secrets.
 
         A smaller codebase (single app.py file) so this should be faster
         than express_api_nosec. Tests the pipeline against Python code.
         """
-        from forge.app import remediate
+        _skip_unless_openrouter()
 
         repo = _copy_golden_codebase("flask_exposed_secrets", tmp_path)
         config = _make_live_config({
@@ -543,12 +620,7 @@ class TestLiveRemediate:
             "max_outer_replans": 0,
         })
 
-        raw = await remediate(
-            repo_path=str(repo),
-            config=config,
-        )
-
-        result = _parse_forge_result(raw)
+        result = await _run_remediate(repo_path=str(repo), config=config)
 
         assert result.success is True, f"Full pipeline failed: {result.summary}"
         assert result.total_findings > 0, (
@@ -558,13 +630,13 @@ class TestLiveRemediate:
         assert result.duration_seconds > 0
 
     @pytest.mark.timeout(REMEDIATE_TIMEOUT)
-    async def test_dry_run_does_not_modify_files(self, skip_unless_live, tmp_path):
+    async def test_dry_run_does_not_modify_files(self, tmp_path):
         """Dry-run mode should discover findings but never modify code.
 
         Verifies that with dry_run=True, no files in the repo are changed
         even when findings are present.
         """
-        from forge.app import remediate
+        _skip_unless_openrouter()
 
         repo = _copy_golden_codebase("express_api_nosec", tmp_path)
 
@@ -579,12 +651,7 @@ class TestLiveRemediate:
             "dry_run": True,
         })
 
-        raw = await remediate(
-            repo_path=str(repo),
-            config=config,
-        )
-
-        result = _parse_forge_result(raw)
+        result = await _run_remediate(repo_path=str(repo), config=config)
 
         assert result.success is True
         assert result.findings_fixed == 0, "dry_run should produce zero fixes"
@@ -605,28 +672,25 @@ class TestLivePipelineInvariants:
     """Tests for structural invariants that must hold across all runs."""
 
     @pytest.mark.timeout(DISCOVERY_TIMEOUT)
-    async def test_forge_run_id_is_unique(self, skip_unless_live, tmp_path):
+    async def test_forge_run_id_is_unique(self, tmp_path):
         """Two consecutive runs must produce different forge_run_ids."""
-        from forge.app import discover
+        _skip_unless_openrouter()
 
         repo1 = _copy_golden_codebase("express_api_nosec", tmp_path / "run1")
         repo2 = _copy_golden_codebase("express_api_nosec", tmp_path / "run2")
         config = _make_live_config({"mode": "discovery", "dry_run": True})
 
-        raw1 = await discover(repo_path=str(repo1), config=config)
-        raw2 = await discover(repo_path=str(repo2), config=config)
-
-        result1 = _parse_forge_result(raw1)
-        result2 = _parse_forge_result(raw2)
+        result1 = await _run_discover(repo_path=str(repo1), config=config)
+        result2 = await _run_discover(repo_path=str(repo2), config=config)
 
         assert result1.forge_run_id != result2.forge_run_id, (
             "Each FORGE run must have a unique ID"
         )
 
     @pytest.mark.timeout(DISCOVERY_TIMEOUT)
-    async def test_empty_repo_does_not_crash(self, skip_unless_live, tmp_path):
+    async def test_empty_repo_does_not_crash(self, tmp_path):
         """An empty repo should produce zero findings, not crash."""
-        from forge.app import discover
+        _skip_unless_openrouter()
 
         repo = tmp_path / "empty-repo"
         repo.mkdir()
@@ -649,9 +713,7 @@ class TestLivePipelineInvariants:
 
         config = _make_live_config({"mode": "discovery", "dry_run": True})
 
-        raw = await discover(repo_path=str(repo), config=config)
-
-        result = _parse_forge_result(raw)
+        result = await _run_discover(repo_path=str(repo), config=config)
 
         # The pipeline should complete without crashing
         assert result.success is True, (
