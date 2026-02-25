@@ -15,7 +15,10 @@ import os
 import time
 from pathlib import Path
 
-from agentfield import Agent
+try:
+    from agentfield import Agent
+except ImportError:
+    Agent = None  # Standalone mode — app.py is not used directly
 
 from forge.config import ForgeConfig
 from forge.execution.json_utils import safe_parse_agent_response
@@ -35,15 +38,24 @@ WORKSPACES_DIR = os.getenv("WORKSPACES_DIR", "/workspaces")
 
 logger = logging.getLogger(__name__)
 
-app = Agent(
-    node_id=NODE_ID,
-    version="0.1.0",
-    description="FORGE: Framework for Orchestrated Remediation & Governance Engine",
-    agentfield_server=os.getenv("AGENTFIELD_SERVER", "http://localhost:8080"),
-    api_key=os.getenv("AGENTFIELD_API_KEY"),
-)
+if Agent is not None:
+    app = Agent(
+        node_id=NODE_ID,
+        version="0.1.0",
+        description="FORGE: Framework for Orchestrated Remediation & Governance Engine",
+        agentfield_server=os.getenv("AGENTFIELD_SERVER", "http://localhost:8080"),
+        api_key=os.getenv("AGENTFIELD_API_KEY"),
+    )
+    app.include_router(router)
+else:
+    app = None  # Use forge.standalone for CLI mode
 
-app.include_router(router)
+
+def _reasoner_decorator():
+    """Return app.reasoner() if AgentField is available, else a no-op."""
+    if app is not None:
+        return app.reasoner()
+    return lambda fn: fn
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
@@ -81,7 +93,7 @@ def _resolve_repo_path(repo_url: str, repo_path: str) -> str:
 # ── Main Reasoners ────────────────────────────────────────────────────
 
 
-@app.reasoner()
+@_reasoner_decorator()
 async def remediate(
     repo_url: str = "",
     repo_path: str = "",
@@ -262,7 +274,7 @@ async def remediate(
     return result.model_dump()
 
 
-@app.reasoner()
+@_reasoner_decorator()
 async def discover(
     repo_url: str = "",
     repo_path: str = "",
@@ -279,7 +291,7 @@ async def discover(
     )
 
 
-@app.reasoner()
+@_reasoner_decorator()
 async def scan(
     repo_url: str = "",
     repo_path: str = "",
@@ -289,7 +301,7 @@ async def scan(
     return await discover(repo_url=repo_url, repo_path=repo_path, config=config)
 
 
-@app.reasoner()
+@_reasoner_decorator()
 async def fix_single(
     repo_path: str = "",
     finding: dict | None = None,
