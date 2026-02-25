@@ -1,20 +1,27 @@
 """Cost monitoring and training data logging for FORGE.
 
 Every agent invocation logs: model used, input/output tokens, cost,
-latency, success/failure. Training data logs capture finding→fix
+latency, success/failure. Training data logs capture finding->fix
 patterns for the fine-tuning flywheel.
+
+The ``ForgeTelemetry`` class supports a **context-var backed singleton**
+so any code in the async call-chain can access the active instance via
+``ForgeTelemetry.current()`` without explicit plumbing.  This is the
+"microservice" pattern: set up telemetry at the pipeline entry point and
+every agent invocation is automatically captured.
 """
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import os
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
+from typing import Any, Generator
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +36,12 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
 }
 
 DEFAULT_PRICING = (1.00, 5.00)  # Fallback for unknown models
+
+# ── Context var for async-safe singleton ─────────────────────────────
+
+_current_telemetry: contextvars.ContextVar[ForgeTelemetry | None] = (
+    contextvars.ContextVar("_current_telemetry", default=None)
+)
 
 
 @dataclass
@@ -52,7 +65,7 @@ class AgentInvocationLog:
 
 @dataclass
 class TrainingDataEntry:
-    """A finding→fix pair for the training data flywheel."""
+    """A finding->fix pair for the training data flywheel."""
 
     finding_id: str
     finding_category: str
@@ -76,6 +89,10 @@ class ForgeTelemetry:
 
     Data is accumulated in memory and flushed to artifacts_dir at
     the end of the run.
+
+    **Singleton access:** Use ``ForgeTelemetry.current()`` to get the
+    active instance from anywhere in the async call-chain.  Activate
+    via the ``activate()`` context manager at the pipeline entry point.
     """
 
     def __init__(self, artifacts_dir: str = "", run_id: str = "") -> None:
@@ -84,6 +101,33 @@ class ForgeTelemetry:
         self.invocations: list[AgentInvocationLog] = []
         self.training_data: list[TrainingDataEntry] = []
         self._start_time = time.monotonic()
+
+    # ── Context-var singleton API ────────────────────────────────────
+
+    @staticmethod
+    def current() -> ForgeTelemetry | None:
+        """Return the active telemetry instance, or None."""
+        return _current_telemetry.get()
+
+    @contextmanager
+    def activate(self) -> Generator[ForgeTelemetry, None, None]:
+        """Activate this instance as the current telemetry context.
+
+        Usage::
+
+            telemetry = ForgeTelemetry(run_id="abc")
+            with telemetry.activate():
+                # Any code here (including AgentAI.run()) will
+                # auto-log invocations to this instance.
+                await run_standalone(...)
+        """
+        token = _current_telemetry.set(self)
+        try:
+            yield self
+        finally:
+            _current_telemetry.reset(token)
+
+    # ── Logging API ──────────────────────────────────────────────────
 
     def log_invocation(
         self,
@@ -114,6 +158,11 @@ class ForgeTelemetry:
             finding_id=finding_id,
         )
         self.invocations.append(entry)
+
+        logger.debug(
+            "Telemetry: %s | %s | %d+%d tok | $%.6f | %dms",
+            agent_name, model, input_tokens, output_tokens, entry.cost_usd, latency_ms,
+        )
         return entry
 
     def log_training_pair(
@@ -131,7 +180,7 @@ class ForgeTelemetry:
         escalated: bool = False,
         model_used: str = "",
     ) -> None:
-        """Log a finding→fix pair for the training data flywheel."""
+        """Log a finding->fix pair for the training data flywheel."""
         entry = TrainingDataEntry(
             finding_id=finding_id,
             finding_category=category,
@@ -187,7 +236,7 @@ class ForgeTelemetry:
     def flush(self) -> None:
         """Write collected data to artifacts_dir."""
         if not self.artifacts_dir:
-            logger.warning("No artifacts_dir set — skipping telemetry flush")
+            logger.warning("No artifacts_dir set -- skipping telemetry flush")
             return
 
         telemetry_dir = os.path.join(self.artifacts_dir, "telemetry")
