@@ -27,6 +27,9 @@ FORGE_ROLE_TO_MODEL_FIELD: dict[str, str] = {
     "code_reviewer": "code_reviewer_model",
     "integration_validator": "integration_validator_model",
     "debt_tracker": "debt_tracker_model",
+    # Hive Discovery roles
+    "swarm_worker": "swarm_worker_model",
+    "synthesizer": "synthesizer_model",
 }
 
 # ── Default model assignments per spec ────────────────────────────────
@@ -47,6 +50,9 @@ FORGE_DEFAULT_MODELS: dict[str, str] = {
     # Coding agents — NON-NEGOTIABLE frontier model
     "coder_tier2_model": "anthropic/claude-sonnet-4.6",
     "coder_tier3_model": "anthropic/claude-sonnet-4.6",
+    # Hive Discovery — cheap workers + strong synthesizer
+    "swarm_worker_model": "minimax/minimax-m2.5",
+    "synthesizer_model": "anthropic/claude-sonnet-4.6",
 }
 
 # ── Provider routing ──────────────────────────────────────────────────
@@ -67,6 +73,9 @@ ROLE_TO_PROVIDER: dict[str, str] = {
     "code_reviewer": "openrouter_direct",
     "integration_validator": "opencode",
     "debt_tracker": "openrouter_direct",
+    # Hive Discovery
+    "swarm_worker": "openrouter_direct",
+    "synthesizer": "openrouter_direct",
 }
 
 
@@ -100,6 +109,12 @@ class ForgeConfig(BaseModel):
     dry_run: bool = False  # scan only, no fixes
     skip_tiers: list[int] = []  # e.g. [0] to process even invalid findings
     focus_categories: list[str] = []  # e.g. ["security"] to only fix security
+
+    # ── Hive Discovery (swarm architecture) ─────────────────────────
+    discovery_mode: Literal["classic", "swarm"] = "classic"
+    swarm_target_segments: int = 5  # Target number of segments for community detection
+    swarm_enable_wave2: bool = True  # Enable Wave 2 (MoA re-analysis)
+    swarm_worker_types: list[str] = ["security", "quality", "architecture"]
 
     def resolved_models(self) -> dict[str, str]:
         """Resolve model fields using the standard cascade.
