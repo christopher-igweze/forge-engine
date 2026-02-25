@@ -439,8 +439,8 @@ class TestLiveFixSingle:
             "failed_retryable", "failed_escalated", "deferred",
         ), f"Unexpected outcome: {raw['outcome']}"
 
-        # If the fix succeeded, verify the file was actually changed
-        if raw.get("success"):
+        # If the fix applied code changes, verify the file was modified
+        if raw.get("outcome") == "completed" and raw.get("files_changed"):
             config_content = (repo / "config.py").read_text()
             # The hardcoded key should no longer be present verbatim
             assert "sk-live-FAKEKEYFORTEST1234567890" not in config_content, (
@@ -521,8 +521,8 @@ class TestLiveFixSingle:
         assert raw.get("finding_id") == "F-livesql01"
         assert "outcome" in raw
 
-        # If successful, the string interpolation should be gone
-        if raw.get("success"):
+        # If the fix applied code changes, verify the injection is gone
+        if raw.get("outcome") == "completed" and raw.get("files_changed"):
             query_content = (repo / "query.js").read_text()
             assert "${name}" not in query_content, (
                 "String interpolation SQL injection should be fixed"
