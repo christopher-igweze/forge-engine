@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -248,3 +249,62 @@ def mock_app():
     app = MagicMock()
     app.call = AsyncMock()
     return app
+
+
+# ── Live Test Infrastructure ─────────────────────────────────────────
+
+
+def pytest_addoption(parser):
+    """Add --run-live flag for live integration tests."""
+    parser.addoption(
+        "--run-live",
+        action="store_true",
+        default=False,
+        help="Run live E2E tests against real AgentField + LLM APIs",
+    )
+
+
+def pytest_configure(config):
+    """Register the 'live' marker."""
+    config.addinivalue_line(
+        "markers",
+        "live: mark test as a live E2E test (requires --run-live or FORGE_LIVE_TESTS=1)",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    """Auto-skip tests marked @pytest.mark.live unless opted in."""
+    run_live = config.getoption("--run-live", default=False)
+    env_live = os.environ.get("FORGE_LIVE_TESTS", "0") == "1"
+
+    if run_live or env_live:
+        return  # do not skip
+
+    skip_live = pytest.mark.skip(reason="Live tests require --run-live or FORGE_LIVE_TESTS=1")
+    for item in items:
+        if "live" in item.keywords:
+            item.add_marker(skip_live)
+
+
+@pytest.fixture
+def skip_unless_live(request):
+    """Fixture that skips the test unless live mode is enabled.
+
+    Use as a parameter in any test that requires a live AgentField instance.
+    Also validates that required environment variables are set.
+    """
+    run_live = request.config.getoption("--run-live", default=False)
+    env_live = os.environ.get("FORGE_LIVE_TESTS", "0") == "1"
+
+    if not (run_live or env_live):
+        pytest.skip("Live tests require --run-live or FORGE_LIVE_TESTS=1")
+
+    # Validate required env vars
+    missing = []
+    if not os.environ.get("AGENTFIELD_SERVER"):
+        missing.append("AGENTFIELD_SERVER")
+    if not os.environ.get("OPENROUTER_API_KEY"):
+        missing.append("OPENROUTER_API_KEY")
+
+    if missing:
+        pytest.skip(f"Missing required env vars: {', '.join(missing)}")
