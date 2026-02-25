@@ -32,4 +32,6 @@ markers = [
     "unit: Unit tests for individual agents",
     "integration: Integration tests for control loops",
     "golden: Golden test suite (e2e with flawed codebases)",
+    "live: Live E2E tests against real AgentField + LLM APIs (requires --run-live or FORGE_LIVE_TESTS=1)",
+    "timeout: Per-test timeout in seconds (requires pytest-timeout plugin)",
 ]

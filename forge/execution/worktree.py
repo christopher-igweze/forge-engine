@@ -4,6 +4,10 @@ Each Tier 2/3 fix gets its own git worktree so coders can make changes
 without interfering with each other. After a fix is approved, the
 worktree branch is merged back into the main branch.
 
+Includes crash recovery: locked worktrees, stale lock files in
+.git/worktrees/, and orphaned filesystem directories are all handled
+so a prior crash never blocks the next FORGE run.
+
 Adapted from SWE-AF's workspace.py pattern.
 """
 
@@ -34,6 +38,36 @@ def _run_git(
     )
 
 
+def _unlock_worktree(repo_path: str, worktree_path: str) -> None:
+    """Remove the lock file for a worktree if it exists.
+
+    When ``git worktree remove`` is interrupted (e.g. process crash, SIGKILL),
+    a ``locked`` file is left inside ``.git/worktrees/<name>/`` which prevents
+    subsequent ``git worktree add`` or ``git worktree remove`` from operating
+    on that worktree.  This helper detects and removes that lock file.
+
+    Args:
+        repo_path: Path to the main repository.
+        worktree_path: Absolute path to the worktree directory.
+    """
+    wt_name = os.path.basename(worktree_path)
+
+    # Resolve the .git directory (handles both regular repos and worktrees)
+    git_dir = os.path.join(repo_path, ".git")
+    if os.path.isfile(git_dir):
+        # Inside a worktree — read the real gitdir path
+        with open(git_dir) as f:
+            git_dir = f.read().strip().removeprefix("gitdir: ")
+
+    lock_file = os.path.join(git_dir, "worktrees", wt_name, "locked")
+    if os.path.isfile(lock_file):
+        try:
+            os.remove(lock_file)
+            logger.info("Removed stale lock file: %s", lock_file)
+        except OSError as e:
+            logger.warning("Could not remove lock file %s: %s", lock_file, e)
+
+
 def create_worktree(
     repo_path: str,
     finding_id: str,
@@ -54,9 +88,10 @@ def create_worktree(
     branch_name = f"forge/fix-{safe_id}"
     worktree_dir = os.path.join(repo_path, WORKTREE_DIR, f"fix-{safe_id}")
 
-    # Clean up stale worktree if it exists
+    # Clean up stale worktree if it exists (unlock first in case of prior crash)
     if os.path.isdir(worktree_dir):
         logger.info("Cleaning up stale worktree: %s", worktree_dir)
+        _unlock_worktree(repo_path, worktree_dir)
         remove_worktree(repo_path, worktree_dir)
 
     # Ensure the worktree parent dir exists
@@ -160,6 +195,9 @@ def remove_worktree(repo_path: str, worktree_path: str) -> None:
     if result.returncode == 0:
         branch = result.stdout.strip()
 
+    # Unlock before removal — a crash may have left a lock file
+    _unlock_worktree(repo_path, worktree_path)
+
     # Remove the worktree
     _run_git(
         ["worktree", "remove", "--force", worktree_path],
@@ -181,15 +219,34 @@ def cleanup_all_worktrees(repo_path: str) -> None:
     """Remove all FORGE worktrees and prune stale entries.
 
     Called after a FORGE run completes (success or failure).
+
+    Handles three layers of stale state:
+      1. Git-tracked worktrees that are locked (prior crash).
+      2. ``.git/worktrees/`` lock files that prevent pruning.
+      3. ``.forge-worktrees/`` directory remains that git no longer knows about.
     """
     worktree_root = os.path.join(repo_path, WORKTREE_DIR)
 
-    # Prune stale worktree references
+    # --- Phase 1: initial prune (removes worktrees whose directories vanished)
     _run_git(["worktree", "prune"], cwd=repo_path, check=False)
 
-    # Remove the worktree directory
+    # --- Phase 2: remove lock files from .git/worktrees/ so prune/remove work
+    git_wt_dir = os.path.join(repo_path, ".git", "worktrees")
+    if os.path.isdir(git_wt_dir):
+        for entry in os.listdir(git_wt_dir):
+            lock_file = os.path.join(git_wt_dir, entry, "locked")
+            if os.path.isfile(lock_file):
+                try:
+                    os.remove(lock_file)
+                    logger.info("Removed lock file during cleanup: %s", lock_file)
+                except OSError as e:
+                    logger.warning("Could not remove lock file %s: %s", lock_file, e)
+
+    # --- Phase 3: re-prune now that locks are gone
+    _run_git(["worktree", "prune"], cwd=repo_path, check=False)
+
+    # --- Phase 4: remove any FORGE worktrees that git still tracks
     if os.path.isdir(worktree_root):
-        # List remaining worktrees
         result = _run_git(["worktree", "list", "--porcelain"], cwd=repo_path, check=False)
         if result.returncode == 0:
             for line in result.stdout.splitlines():
@@ -197,7 +254,8 @@ def cleanup_all_worktrees(repo_path: str) -> None:
                     wt_path = line.split(" ", 1)[1]
                     remove_worktree(repo_path, wt_path)
 
-        # Clean up directory
+    # --- Phase 5: nuke stale filesystem dirs that git doesn't know about
+    if os.path.isdir(worktree_root):
         shutil.rmtree(worktree_root, ignore_errors=True)
 
     # Clean up forge/* branches
@@ -212,6 +270,82 @@ def cleanup_all_worktrees(repo_path: str) -> None:
                 _run_git(["branch", "-D", branch], cwd=repo_path, check=False)
 
     logger.info("Cleaned up all FORGE worktrees")
+
+
+def recover_worktrees(repo_path: str) -> list[str]:
+    """Recover from worktrees left behind by a prior crash.
+
+    Scans all git-tracked worktrees that live under ``.forge-worktrees/``
+    and removes any that are in a bad state (locked, missing HEAD, or
+    otherwise unusable).  Safe to call at the start of every FORGE run.
+
+    Args:
+        repo_path: Path to the main repository.
+
+    Returns:
+        List of worktree paths that were recovered (removed).
+    """
+    recovered: list[str] = []
+
+    result = _run_git(
+        ["worktree", "list", "--porcelain"],
+        cwd=repo_path, check=False,
+    )
+    if result.returncode != 0:
+        logger.warning("Could not list worktrees: %s", result.stderr)
+        return recovered
+
+    # Parse porcelain output into worktree records.
+    # Each record is separated by a blank line.  Fields:
+    #   worktree <path>
+    #   HEAD <sha>
+    #   branch <ref>
+    #   locked           (optional)
+    #   prunable         (optional)
+    current_path: str | None = None
+    is_locked = False
+    has_head = False
+
+    def _flush_record() -> None:
+        """Check the current record and recover if needed."""
+        nonlocal current_path, is_locked, has_head
+        if current_path and WORKTREE_DIR in current_path:
+            needs_recovery = is_locked or not has_head
+            # Also check if the directory itself is missing
+            if not needs_recovery and not os.path.isdir(current_path):
+                needs_recovery = True
+            if needs_recovery:
+                logger.info("Recovering bad worktree: %s (locked=%s, has_head=%s)",
+                            current_path, is_locked, has_head)
+                _unlock_worktree(repo_path, current_path)
+                remove_worktree(repo_path, current_path)
+                recovered.append(current_path)
+        current_path = None
+        is_locked = False
+        has_head = False
+
+    for line in result.stdout.splitlines() + [""]:  # trailing blank to flush
+        if line.startswith("worktree "):
+            _flush_record()
+            current_path = line.split(" ", 1)[1]
+
+        elif line.startswith("HEAD "):
+            sha = line.split(" ", 1)[1]
+            # A valid HEAD is a 40-char hex SHA
+            has_head = len(sha) == 40 and all(c in "0123456789abcdef" for c in sha)
+
+        elif line.strip() == "locked":
+            is_locked = True
+
+        elif line == "":
+            _flush_record()
+
+    # Final prune to clean up any dangling references
+    if recovered:
+        _run_git(["worktree", "prune"], cwd=repo_path, check=False)
+        logger.info("Recovered %d worktree(s): %s", len(recovered), recovered)
+
+    return recovered
 
 
 def get_current_branch(repo_path: str) -> str:

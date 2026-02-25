@@ -18,6 +18,7 @@ from pathlib import Path
 from agentfield import Agent
 
 from forge.config import ForgeConfig
+from forge.execution.json_utils import safe_parse_agent_response
 from forge.reasoners import router
 from forge.schemas import (
     AuditFinding,
@@ -113,6 +114,15 @@ async def remediate(
         os.makedirs(state.artifacts_dir, exist_ok=True)
 
         logger.info("FORGE remediate starting: %s", state.repo_path)
+
+        # ── Recover from prior crashes (stale worktrees) ─────────────────
+        try:
+            from forge.execution.worktree import recover_worktrees
+            recovered = recover_worktrees(state.repo_path)
+            if recovered:
+                logger.info("Recovered %d stale worktrees from prior crash", len(recovered))
+        except Exception as e:
+            logger.warning("Worktree recovery failed (non-fatal): %s", e)
 
         # ── Check for resumable checkpoint ──────────────────────────────
         from forge.execution.checkpoint import (
@@ -717,15 +727,8 @@ def _filter_execution_levels(
 
 
 def _unwrap_to_model(result):
-    """Handle AgentField envelope unwrapping if needed."""
-    if isinstance(result, dict):
-        # Check for AgentField envelope
-        if "result" in result and "status" in result:
-            inner = result.get("result")
-            if inner is not None:
-                return inner
-        return result
-    return result
+    """Handle AgentField envelope unwrapping with resilient JSON parsing."""
+    return safe_parse_agent_response(result, fallback=result)
 
 
 def _build_summary(state: ForgeExecutionState) -> str:

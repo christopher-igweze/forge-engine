@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 
 from agentfield import Agent
 
+from forge.execution.json_utils import safe_parse_agent_response
 from forge.schemas import (
     AuditFinding,
     CoderFixResult,
@@ -224,8 +225,6 @@ async def _llm_escalation(
     resolved_models: dict[str, str],
 ) -> EscalationDecision:
     """Use the LLM escalation agent to decide the next action."""
-    import json as json_mod
-    import re
     from forge.prompts.escalation_agent import (
         ESCALATION_SYSTEM_PROMPT,
         build_escalation_task,
@@ -251,18 +250,9 @@ async def _llm_escalation(
     )
 
     # Parse the response
-    result_dict = _unwrap(result)
+    result_dict = safe_parse_agent_response(result)
     if not result_dict:
         raise ValueError("Empty response from escalation agent")
-
-    # Handle raw text response containing JSON
-    if isinstance(result_dict, dict) and "text" in result_dict:
-        text = result_dict["text"]
-        json_match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
-        if json_match:
-            result_dict = json_mod.loads(json_match.group())
-        else:
-            raise ValueError(f"Could not parse JSON from escalation response: {text[:200]}")
 
     action_str = result_dict.get("action", "DEFER").upper()
     action = (
@@ -554,11 +544,5 @@ async def _execute_single_fix(
 
 
 def _unwrap(result) -> dict:
-    """Handle AgentField envelope unwrapping."""
-    if isinstance(result, dict):
-        if "result" in result and "status" in result:
-            inner = result.get("result")
-            if inner is not None:
-                return inner
-        return result
-    return {}
+    """Handle AgentField envelope unwrapping with resilient JSON parsing."""
+    return safe_parse_agent_response(result)
