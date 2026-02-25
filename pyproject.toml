@@ -1,0 +1,24 @@
+[project]
+name = "forge-engine"
+version = "0.1.0"
+description = "FORGE: Framework for Orchestrated Remediation & Governance Engine"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+    "pydantic>=2.0",
+    "agentfield>=0.1.9",
+]
+
+[project.optional-dependencies]
+claude = ["claude-agent-sdk>=0.1.20"]
+
+[project.scripts]
+forge-engine = "forge.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[tool.setuptools.packages.find]
+include = ["forge*"]

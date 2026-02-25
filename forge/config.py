@@ -1,0 +1,134 @@
+"""FORGE configuration and per-role model routing.
+
+Resolution order: FORGE_DEFAULT_MODELS < models.default < models.<role>
+"""
+
+from __future__ import annotations
+
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict
+
+from forge.schemas import ForgeMode
+
+
+# ── Role-to-field mapping ─────────────────────────────────────────────
+
+FORGE_ROLE_TO_MODEL_FIELD: dict[str, str] = {
+    "codebase_analyst": "codebase_analyst_model",
+    "security_auditor": "security_auditor_model",
+    "quality_auditor": "quality_auditor_model",
+    "architecture_reviewer": "architecture_reviewer_model",
+    "fix_strategist": "fix_strategist_model",
+    "triage_classifier": "triage_classifier_model",
+    "coder_tier2": "coder_tier2_model",
+    "coder_tier3": "coder_tier3_model",
+    "test_generator": "test_generator_model",
+    "code_reviewer": "code_reviewer_model",
+    "integration_validator": "integration_validator_model",
+    "debt_tracker": "debt_tracker_model",
+}
+
+# ── Default model assignments per spec ────────────────────────────────
+
+FORGE_DEFAULT_MODELS: dict[str, str] = {
+    # Analysis agents — cheap
+    "codebase_analyst_model": "minimax/minimax-m2.5",
+    "quality_auditor_model": "minimax/minimax-m2.5",
+    "debt_tracker_model": "minimax/minimax-m2.5",
+    # Reasoning agents — mid-tier
+    "security_auditor_model": "anthropic/claude-haiku-4.5",
+    "architecture_reviewer_model": "anthropic/claude-haiku-4.5",
+    "fix_strategist_model": "anthropic/claude-haiku-4.5",
+    "triage_classifier_model": "anthropic/claude-haiku-4.5",
+    "test_generator_model": "anthropic/claude-haiku-4.5",
+    "code_reviewer_model": "anthropic/claude-haiku-4.5",
+    "integration_validator_model": "anthropic/claude-haiku-4.5",
+    # Coding agents — NON-NEGOTIABLE frontier model
+    "coder_tier2_model": "anthropic/claude-sonnet-4.6",
+    "coder_tier3_model": "anthropic/claude-sonnet-4.6",
+}
+
+# ── Provider routing ──────────────────────────────────────────────────
+
+# Analysis/planning agents use openrouter_direct (text-in/JSON-out, no tools)
+# Coding agents use opencode (needs Read/Write/Edit/Bash/Glob/Grep tools)
+
+ROLE_TO_PROVIDER: dict[str, str] = {
+    "codebase_analyst": "openrouter_direct",
+    "security_auditor": "openrouter_direct",
+    "quality_auditor": "openrouter_direct",
+    "architecture_reviewer": "openrouter_direct",
+    "fix_strategist": "openrouter_direct",
+    "triage_classifier": "openrouter_direct",
+    "coder_tier2": "opencode",
+    "coder_tier3": "opencode",
+    "test_generator": "opencode",
+    "code_reviewer": "openrouter_direct",
+    "integration_validator": "opencode",
+    "debt_tracker": "openrouter_direct",
+}
+
+
+class ForgeConfig(BaseModel):
+    """Configuration for a FORGE run.
+
+    Mirrors SWE-AF's BuildConfig pattern with FORGE-specific defaults.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    runtime: Literal["open_code"] = "open_code"
+    models: dict[str, str] | None = None  # role -> model overrides
+
+    mode: ForgeMode = ForgeMode.FULL
+    max_inner_retries: int = 3  # Inner loop: coder retry on REQUEST_CHANGES
+    max_middle_escalations: int = 2  # Middle loop: escalation attempts
+    max_outer_replans: int = 1  # Outer loop: re-run Fix Strategist
+    agent_timeout_seconds: int = 900  # 15 min per agent
+
+    enable_tier0_autofix: bool = True
+    enable_tier1_rules: bool = True
+    enable_parallel_audit: bool = True  # Run audit passes concurrently
+
+    repo_url: str = ""
+    repo_path: str = ""
+    enable_github_pr: bool = True
+    github_pr_base: str = "main"
+
+    dry_run: bool = False  # scan only, no fixes
+    skip_tiers: list[int] = []  # e.g. [0] to process even invalid findings
+    focus_categories: list[str] = []  # e.g. ["security"] to only fix security
+
+    def resolved_models(self) -> dict[str, str]:
+        """Resolve model fields using the standard cascade.
+
+        Resolution: FORGE_DEFAULT_MODELS < models.default < models.<role>
+        """
+        resolved = dict(FORGE_DEFAULT_MODELS)
+        overrides = self.models or {}
+
+        # Apply default override to all fields
+        default_model = overrides.get("default")
+        if default_model:
+            for field in resolved:
+                resolved[field] = default_model
+
+        # Apply per-role overrides
+        for role, model_id in overrides.items():
+            if role == "default":
+                continue
+            field = FORGE_ROLE_TO_MODEL_FIELD.get(role)
+            if field and field in resolved:
+                resolved[field] = model_id
+
+        return resolved
+
+    def model_for_role(self, role: str) -> str:
+        """Get the resolved model ID for a specific agent role."""
+        field = FORGE_ROLE_TO_MODEL_FIELD.get(role, "")
+        return self.resolved_models().get(field, "minimax/minimax-m2.5")
+
+    def provider_for_role(self, role: str) -> str:
+        """Get the provider name for a specific agent role."""
+        return ROLE_TO_PROVIDER.get(role, "openrouter_direct")
