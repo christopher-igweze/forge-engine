@@ -85,7 +85,10 @@ def save_checkpoint(
             phase=phase,
             repo_path=state.repo_path,
             artifacts_dir=state.artifacts_dir,
-            codebase_map=state.codebase_map.model_dump() if state.codebase_map else None,
+            codebase_map=(
+                state.codebase_map if isinstance(state.codebase_map, dict)
+                else state.codebase_map.model_dump() if state.codebase_map else None
+            ),
             security_findings=[f.model_dump() for f in state.security_findings],
             quality_findings=[f.model_dump() for f in state.quality_findings],
             architecture_findings=[f.model_dump() for f in state.architecture_findings],

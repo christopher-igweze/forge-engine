@@ -25,6 +25,7 @@ from forge.execution.json_utils import safe_parse_agent_response
 from forge.reasoners import router
 from forge.schemas import (
     AuditFinding,
+    CodebaseMap,
     ForgeExecutionState,
     ForgeMode,
     ForgeResult,
@@ -427,7 +428,14 @@ async def _run_discovery(
         model=resolved_models.get("codebase_analyst_model", "minimax/minimax-m2.5"),
         ai_provider=cfg.provider_for_role("codebase_analyst"),
     )
-    state.codebase_map = _unwrap_to_model(codebase_map_dict)
+    unwrapped = _unwrap_to_model(codebase_map_dict)
+    if isinstance(unwrapped, dict):
+        try:
+            state.codebase_map = CodebaseMap(**unwrapped)
+        except Exception:
+            state.codebase_map = unwrapped  # fallback to raw dict
+    else:
+        state.codebase_map = unwrapped
     invocations += 1
 
     # Agents 2, 3, 4: Run in parallel (all depend only on CodebaseMap)
@@ -637,7 +645,12 @@ async def _run_triage(
                 "agent": "tier1_scanner",
             })
 
-    codebase_map_dict = state.codebase_map.model_dump() if state.codebase_map else {}
+    if state.codebase_map is None:
+        codebase_map_dict = {}
+    elif isinstance(state.codebase_map, dict):
+        codebase_map_dict = state.codebase_map
+    else:
+        codebase_map_dict = state.codebase_map.model_dump()
 
     # Agent 6: Triage Classifier
     logger.info("Triage: Running Agent 6 (Triage Classifier)")

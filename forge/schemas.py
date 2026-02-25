@@ -146,10 +146,10 @@ class EntryPoint(BaseModel):
 class TechStack(BaseModel):
     """Detected technology stack."""
 
-    frontend: str = ""
-    backend: str = ""
-    database: str = ""
-    hosting: str = ""
+    frontend: str | None = ""
+    backend: str | None = ""
+    database: str | None = ""
+    hosting: str | None = ""
     packages: list[str] = Field(default_factory=list)
 
 
