@@ -678,6 +678,19 @@ async def _run_validation(
     except Exception as e:
         logger.error("Debt tracker failed: %s", e)
 
+    # Generate formatted reports (JSON + HTML + PDF if weasyprint available)
+    if state.readiness_report:
+        try:
+            from forge.execution.report import generate_reports
+            report_paths = generate_reports(
+                state.readiness_report,
+                state.artifacts_dir,
+                run_id=state.forge_run_id,
+            )
+            logger.info("Reports generated: %s", ", ".join(report_paths.keys()))
+        except Exception as e:
+            logger.error("Report generation failed: %s", e)
+
     logger.info(
         "Validation complete: integration=%s, readiness_score=%d",
         "PASS" if state.integration_result and state.integration_result.passed else "FAIL",
