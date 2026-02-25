@@ -100,6 +100,12 @@ async def remediate(
         repo_url=repo_url,
     )
 
+    # Initialize telemetry if learning is enabled
+    telemetry = None
+    if cfg.enable_learning:
+        from forge.execution.telemetry import ForgeTelemetry
+        telemetry = ForgeTelemetry(run_id=state.forge_run_id)
+
     try:
         # ── Step 0: Resolve repo path ──────────────────────────────────
         state.repo_path = _resolve_repo_path(repo_url, repo_path or cfg.repo_path)
@@ -149,6 +155,32 @@ async def remediate(
 
     # Finalize
     elapsed = time.time() - start_time
+
+    # Flush telemetry: training data pairs + cost summary
+    if telemetry is not None:
+        telemetry.artifacts_dir = state.artifacts_dir
+        # Log training data for each completed fix
+        for fix in state.completed_fixes:
+            finding = next(
+                (f for f in state.all_findings if f.id == fix.finding_id), None,
+            )
+            if finding:
+                inner = state.inner_loop_states.get(fix.finding_id)
+                telemetry.log_training_pair(
+                    finding_id=finding.id,
+                    category=finding.category.value,
+                    severity=finding.severity.value,
+                    title=finding.title,
+                    description=finding.description,
+                    tier=finding.tier.value if finding.tier is not None else 2,
+                    outcome=fix.outcome.value,
+                    summary=fix.summary,
+                    files_changed=fix.files_changed,
+                    retry_count=inner.iteration if inner else 1,
+                    escalated=fix.finding_id in state.outer_loop.deferred_findings,
+                )
+        state.estimated_cost_usd = telemetry.total_cost
+        telemetry.flush()
     state.finished_at = __import__("datetime").datetime.now(
         __import__("datetime").timezone.utc
     )
