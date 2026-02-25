@@ -139,6 +139,13 @@ async def remediate(
     except Exception as e:
         logger.exception("FORGE remediate failed: %s", e)
         state.success = False
+    finally:
+        # Clean up all FORGE worktrees
+        try:
+            from forge.execution.worktree import cleanup_all_worktrees
+            cleanup_all_worktrees(state.repo_path)
+        except Exception as e:
+            logger.warning("Worktree cleanup failed: %s", e)
 
     # Finalize
     elapsed = time.time() - start_time

@@ -360,50 +360,96 @@ async def _execute_single_fix(
     cfg: ForgeConfig,
     resolved_models: dict[str, str],
 ) -> None:
-    """Execute a single fix through inner + middle loops."""
-    # TODO: Git worktree isolation (Phase 3)
-    # For now, fixes run in the main repo path
-    worktree_path = state.repo_path
+    """Execute a single fix through inner + middle loops.
+
+    Each fix runs in an isolated git worktree to avoid conflicts
+    with parallel fixes.
+    """
+    from forge.execution.worktree import (
+        create_worktree,
+        merge_worktree,
+        remove_worktree,
+        get_current_branch,
+    )
+
     codebase_map = state.codebase_map.model_dump() if state.codebase_map else None
 
-    # ── Inner loop ─────────────────────────────────────────────────────
-    inner_state = await run_inner_loop(
-        app, node_id, item, finding, worktree_path, codebase_map, cfg, resolved_models,
-    )
-    state.inner_loop_states[finding.id] = inner_state
-    state.total_agent_invocations += inner_state.iteration * 3  # coder + test + review per iter
+    # Create isolated worktree for this fix
+    try:
+        worktree_path = create_worktree(
+            state.repo_path,
+            finding.id,
+            base_branch=get_current_branch(state.repo_path),
+        )
+    except Exception as e:
+        logger.error("Failed to create worktree for %s: %s", finding.id, e)
+        worktree_path = state.repo_path  # Fallback to main repo
 
-    # Check outcome
-    if inner_state.coder_result and inner_state.coder_result.outcome == FixOutcome.COMPLETED:
-        state.completed_fixes.append(inner_state.coder_result)
-        return
-
-    # ── Middle loop ────────────────────────────────────────────────────
-    escalation = await run_middle_loop(app, node_id, item, finding, inner_state, cfg)
-    state.outer_loop.escalations.append(escalation)
-
-    if escalation.action == EscalationAction.DEFER:
-        state.outer_loop.deferred_findings.append(finding.id)
-        if inner_state.coder_result:
-            inner_state.coder_result.outcome = FixOutcome.DEFERRED
-            state.completed_fixes.append(inner_state.coder_result)
-
-    elif escalation.action == EscalationAction.RECLASSIFY and escalation.new_tier:
-        # Promote to higher tier and retry
-        item.tier = escalation.new_tier
-        new_inner = await run_inner_loop(
+    try:
+        # ── Inner loop ─────────────────────────────────────────────────
+        inner_state = await run_inner_loop(
             app, node_id, item, finding, worktree_path, codebase_map, cfg, resolved_models,
         )
-        state.inner_loop_states[finding.id] = new_inner
+        state.inner_loop_states[finding.id] = inner_state
+        state.total_agent_invocations += inner_state.iteration * 3  # coder + test + review per iter
 
-        if new_inner.coder_result and new_inner.coder_result.outcome == FixOutcome.COMPLETED:
-            state.completed_fixes.append(new_inner.coder_result)
-        else:
+        # Check outcome
+        if inner_state.coder_result and inner_state.coder_result.outcome == FixOutcome.COMPLETED:
+            # Merge worktree back into main branch
+            if worktree_path != state.repo_path:
+                merged = merge_worktree(
+                    state.repo_path,
+                    worktree_path,
+                    target_branch=get_current_branch(state.repo_path),
+                )
+                if not merged:
+                    logger.warning("Merge failed for %s — marking as debt", finding.id)
+                    inner_state.coder_result.outcome = FixOutcome.COMPLETED_WITH_DEBT
+            state.completed_fixes.append(inner_state.coder_result)
+            return
+
+        # ── Middle loop ────────────────────────────────────────────────
+        escalation = await run_middle_loop(app, node_id, item, finding, inner_state, cfg)
+        state.outer_loop.escalations.append(escalation)
+
+        if escalation.action == EscalationAction.DEFER:
             state.outer_loop.deferred_findings.append(finding.id)
+            if inner_state.coder_result:
+                inner_state.coder_result.outcome = FixOutcome.DEFERRED
+                state.completed_fixes.append(inner_state.coder_result)
 
-    elif escalation.action == EscalationAction.ESCALATE:
-        # Will be handled by outer loop
-        pass
+        elif escalation.action == EscalationAction.RECLASSIFY and escalation.new_tier:
+            # Promote to higher tier and retry
+            item.tier = escalation.new_tier
+            new_inner = await run_inner_loop(
+                app, node_id, item, finding, worktree_path, codebase_map, cfg, resolved_models,
+            )
+            state.inner_loop_states[finding.id] = new_inner
+
+            if new_inner.coder_result and new_inner.coder_result.outcome == FixOutcome.COMPLETED:
+                if worktree_path != state.repo_path:
+                    merged = merge_worktree(
+                        state.repo_path,
+                        worktree_path,
+                        target_branch=get_current_branch(state.repo_path),
+                    )
+                    if not merged:
+                        new_inner.coder_result.outcome = FixOutcome.COMPLETED_WITH_DEBT
+                state.completed_fixes.append(new_inner.coder_result)
+            else:
+                state.outer_loop.deferred_findings.append(finding.id)
+
+        elif escalation.action == EscalationAction.ESCALATE:
+            # Will be handled by outer loop
+            pass
+
+    finally:
+        # Clean up worktree (unless it was the fallback)
+        if worktree_path != state.repo_path:
+            try:
+                remove_worktree(state.repo_path, worktree_path)
+            except Exception as e:
+                logger.warning("Failed to clean up worktree %s: %s", worktree_path, e)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
