@@ -18,3 +18,4 @@ env/
 .artifacts/
 .forge-worktrees/
 .forge-checkpoints/
+.forge-benchmarks/
