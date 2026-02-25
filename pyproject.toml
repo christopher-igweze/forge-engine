@@ -13,13 +13,23 @@ dependencies = [
 [project.optional-dependencies]
 claude = ["claude-agent-sdk>=0.1.20"]
 pdf = ["weasyprint>=60.0"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "pytest-cov>=5.0"]
 
 [project.scripts]
 forge-engine = "forge.__main__:main"
 
 [build-system]
 requires = ["setuptools>=68.0"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["forge*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "unit: Unit tests for individual agents",
+    "integration: Integration tests for control loops",
+    "golden: Golden test suite (e2e with flawed codebases)",
+]
