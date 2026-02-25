@@ -134,6 +134,7 @@ async def run_codebase_analyst(
         max_turns=1,
         allowed_tools=[],
         env={"OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY", "")},
+        agent_name="codebase_analyst",
     ))
 
     response = await ai.run(
@@ -223,6 +224,7 @@ async def _run_single_security_pass(
         max_turns=1,
         allowed_tools=[],
         env={"OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY", "")},
+        agent_name=f"security_auditor/{audit_pass.value}",
     ))
 
     response = await ai.run(task, system_prompt=system_prompt)
@@ -374,6 +376,7 @@ async def _run_single_quality_pass(
         max_turns=1,
         allowed_tools=[],
         env={"OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY", "")},
+        agent_name=f"quality_auditor/{audit_pass.value}",
     ))
 
     response = await ai.run(task, system_prompt=system_prompt)
@@ -501,6 +504,7 @@ async def run_architecture_reviewer(
         max_turns=1,
         allowed_tools=[],
         env={"OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY", "")},
+        agent_name="architecture_reviewer",
     ))
 
     response = await ai.run(task, system_prompt=ARCH_REVIEWER_SYSTEM_PROMPT)

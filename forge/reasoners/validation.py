@@ -84,6 +84,7 @@ async def run_integration_validator(
         max_turns=max_turns,
         allowed_tools=[Tool.READ, Tool.BASH, Tool.GLOB, Tool.GREP],
         env={"OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY", "")},
+        agent_name="integration_validator",
     ))
 
     response = await ai.run(task, system_prompt=VALIDATOR_SYSTEM_PROMPT)
@@ -149,6 +150,7 @@ async def run_debt_tracker(
         max_turns=1,
         allowed_tools=[],
         env={"OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY", "")},
+        agent_name="debt_tracker",
     ))
 
     response = await ai.run(task, system_prompt=DEBT_TRACKER_SYSTEM_PROMPT)

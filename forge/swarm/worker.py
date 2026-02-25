@@ -113,6 +113,7 @@ class SwarmWorker(ABC):
             max_turns=1,
             allowed_tools=[],
             env={"OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY", "")},
+            agent_name=f"hive_worker/{self.worker_type}",
         ))
 
         response = await ai.run(task_prompt, system_prompt=system_prompt)

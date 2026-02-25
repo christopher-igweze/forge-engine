@@ -179,6 +179,7 @@ async def run_triage_classifier(
             max_turns=1,
             allowed_tools=[],
             env={"OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY", "")},
+            agent_name="triage_classifier",
         ))
 
         response = await ai.run(task, system_prompt=TRIAGE_SYSTEM_PROMPT)
@@ -273,6 +274,7 @@ async def run_fix_strategist(
         max_turns=1,
         allowed_tools=[],
         env={"OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY", "")},
+        agent_name="fix_strategist",
     ))
 
     response = await ai.run(task, system_prompt=STRATEGIST_SYSTEM_PROMPT)

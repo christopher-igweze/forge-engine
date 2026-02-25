@@ -201,6 +201,7 @@ class SynthesisAgent:
             max_turns=1,
             allowed_tools=[],
             env={"OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY", "")},
+            agent_name="hive_synthesizer",
         ))
 
         response = await ai.run(task, system_prompt=SYNTHESIS_SYSTEM_PROMPT)

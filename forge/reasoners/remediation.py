@@ -107,6 +107,7 @@ async def run_coder_tier2(
         max_turns=max_turns,
         allowed_tools=[t.value for t in _CODER_TOOLS],
         env={"OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY", "")},
+        agent_name="coder_tier2",
     ))
 
     response = await ai.run(task, system_prompt=TIER2_SYSTEM_PROMPT)
@@ -191,6 +192,7 @@ async def run_coder_tier3(
         max_turns=max_turns,
         allowed_tools=[t.value for t in _CODER_TOOLS],
         env={"OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY", "")},
+        agent_name="coder_tier3",
     ))
 
     response = await ai.run(task, system_prompt=TIER3_SYSTEM_PROMPT)
@@ -261,6 +263,7 @@ async def run_test_generator(
         max_turns=max_turns,
         allowed_tools=[t.value for t in _CODER_TOOLS],
         env={"OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY", "")},
+        agent_name="test_generator",
     ))
 
     response = await ai.run(task, system_prompt=TEST_GEN_SYSTEM_PROMPT)
@@ -323,6 +326,7 @@ async def run_code_reviewer(
         max_turns=1,
         allowed_tools=[],
         env={"OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY", "")},
+        agent_name="code_reviewer",
     ))
 
     response = await ai.run(task, system_prompt=REVIEWER_SYSTEM_PROMPT)
@@ -380,6 +384,7 @@ async def run_escalation_agent(
         max_turns=1,
         allowed_tools=[],
         env={"OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY", "")},
+        agent_name="escalation_agent",
     ))
 
     response = await ai.run(task_prompt, system_prompt=system_prompt)
