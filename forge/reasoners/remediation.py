@@ -354,3 +354,44 @@ async def run_code_reviewer(
         result.decision.value, finding_obj.title, result.regression_risk,
     )
     return result.model_dump()
+
+
+# ── Escalation Agent (Middle Loop) ─────────────────────────────────
+
+
+@router.reasoner()
+async def run_escalation_agent(
+    system_prompt: str,
+    task_prompt: str,
+    model: str = "anthropic/claude-haiku-4.5",
+    ai_provider: str = "openrouter_direct",
+) -> dict:
+    """LLM-based escalation agent for the middle loop.
+
+    Decides RECLASSIFY/SPLIT/DEFER/ESCALATE when the inner loop
+    is exhausted. Uses openrouter_direct (read-only analysis).
+    """
+    logger.info("Escalation agent: starting analysis")
+
+    ai = AgentAI(AgentAIConfig(
+        provider=ai_provider,
+        model=model,
+        cwd=".",
+        max_turns=1,
+        allowed_tools=[],
+        env={"OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY", "")},
+    ))
+
+    response = await ai.run(task_prompt, system_prompt=system_prompt)
+
+    data = {}
+    if response.parsed:
+        data = response.parsed.model_dump() if hasattr(response.parsed, "model_dump") else {}
+    elif response.text:
+        data = _parse_json_response(response.text)
+
+    if not data:
+        data = {"text": response.text or ""}
+
+    logger.info("Escalation agent: decided %s", data.get("action", "unknown"))
+    return data
