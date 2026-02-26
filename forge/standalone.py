@@ -316,6 +316,23 @@ async def run_standalone(
         telemetry.total_cost, telemetry.total_tokens, len(telemetry.invocations),
     )
 
+    # Generate discovery report (findings + remediation plan) after telemetry
+    # flush so cost_usd is populated. Runs for all modes that produce findings.
+    if state.all_findings and state.artifacts_dir:
+        try:
+            from forge.execution.report import generate_discovery_report
+            generate_discovery_report(
+                findings=state.all_findings,
+                plan=state.remediation_plan,
+                artifacts_dir=state.artifacts_dir,
+                run_id=state.forge_run_id,
+                duration_seconds=elapsed,
+                cost_usd=state.estimated_cost_usd,
+                codebase_map=state.codebase_map,
+            )
+        except Exception as e:
+            logger.warning("Discovery report generation failed: %s", e)
+
     state.finished_at = __import__("datetime").datetime.now(
         __import__("datetime").timezone.utc
     )
