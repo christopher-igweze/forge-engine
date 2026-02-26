@@ -81,6 +81,36 @@ def _parse_json_response(text: str) -> dict:
         return {}
 
 
+# LLMs sometimes return sub-pass names or aliases instead of the valid enum values.
+# Map common variants to the canonical FindingCategory values.
+_CATEGORY_ALIASES: dict[str, str] = {
+    "code_patterns": "quality",
+    "error_handling": "reliability",
+    "auth_flow": "security",
+    "data_handling": "security",
+    "infrastructure": "security",
+    "auth": "security",
+    "perf": "performance",
+}
+
+
+def _normalize_finding(f_data: dict) -> dict:
+    """Normalize LLM-returned finding data before Pydantic validation.
+
+    - Maps category aliases to valid FindingCategory enum values
+    - Ensures severity is lowercase
+    """
+    cat = f_data.get("category", "")
+    if isinstance(cat, str):
+        cat_lower = cat.lower().strip()
+        if cat_lower in _CATEGORY_ALIASES:
+            f_data["category"] = _CATEGORY_ALIASES[cat_lower]
+    sev = f_data.get("severity", "")
+    if isinstance(sev, str):
+        f_data["severity"] = sev.lower().strip()
+    return f_data
+
+
 # ── Agent 1: Codebase Analyst ─────────────────────────────────────────
 
 
@@ -242,6 +272,7 @@ async def _run_single_security_pass(
         f_data["audit_pass"] = audit_pass.value
         if "category" not in f_data:
             f_data["category"] = "security"
+        _normalize_finding(f_data)
         try:
             findings.append(AuditFinding(**f_data))
         except Exception as e:
@@ -393,6 +424,7 @@ async def _run_single_quality_pass(
         f_data["audit_pass"] = audit_pass.value
         if "category" not in f_data:
             f_data["category"] = "quality"
+        _normalize_finding(f_data)
         try:
             findings.append(AuditFinding(**f_data))
         except Exception as e:
@@ -520,6 +552,7 @@ async def run_architecture_reviewer(
         f_data["agent"] = "architecture_reviewer"
         if "category" not in f_data:
             f_data["category"] = "architecture"
+        _normalize_finding(f_data)
         try:
             findings.append(AuditFinding(**f_data))
         except Exception as e:

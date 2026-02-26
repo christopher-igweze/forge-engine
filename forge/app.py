@@ -574,6 +574,7 @@ async def _run_swarm_discovery(
         state.codebase_map = CodebaseMap(**cm_data)
 
     # Parse findings
+    from forge.reasoners.discovery import _normalize_finding
     findings_data = hive_result.get("findings", [])
     all_findings = []
     for f_data in findings_data:
@@ -582,6 +583,7 @@ async def _run_swarm_discovery(
             f_data.setdefault("severity", "medium")
             f_data.setdefault("title", "Untitled finding")
             f_data.setdefault("description", "")
+            _normalize_finding(f_data)
             try:
                 all_findings.append(AuditFinding(**f_data))
             except Exception as e:

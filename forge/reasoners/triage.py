@@ -285,6 +285,12 @@ async def run_fix_strategist(
     elif response.text:
         data = _parse_json_response(response.text)
 
+    # Normalize plan items before validation — LLMs sometimes return priority=0
+    for item in data.get("items", []):
+        if isinstance(item, dict) and isinstance(item.get("priority"), int):
+            if item["priority"] < 1:
+                item["priority"] = 1
+
     # Parse into RemediationPlan
     try:
         plan = RemediationPlan(**data)
