@@ -697,6 +697,13 @@ async def _run_triage(
         state.remediation_plan = RemediationPlan(**plan_dict)
     invocations += 1
 
+    # Write tier assignments back to the finding objects so reports show them
+    if state.triage_result and state.triage_result.decisions:
+        tier_map = {d.finding_id: d.tier for d in state.triage_result.decisions}
+        for finding in state.all_findings:
+            if finding.id in tier_map:
+                finding.tier = tier_map[finding.id]
+
     logger.info(
         "Triage complete: %d items in remediation plan",
         state.remediation_plan.total_items if state.remediation_plan else 0,
