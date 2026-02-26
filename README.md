@@ -49,10 +49,22 @@ Validation (Agents 11-12)  Verify fixes, generate readiness report
 ## Requirements
 
 - Python 3.12+
-- [AgentField](https://github.com/anomalyco/agentfield) control plane
 - OpenRouter API key (for LLM providers)
+- [AgentField](https://github.com/anomalyco/agentfield) control plane (optional — only needed for platform mode)
 
 ## Usage
+
+### Standalone Mode
+
+Run FORGE locally without an AgentField server:
+
+```python
+from forge.standalone import run_standalone
+
+result = await run_standalone(repo_path="./my-app", config={"mode": "discovery"})
+```
+
+### AgentField Mode
 
 ```bash
 # Start as AgentField node
@@ -65,8 +77,28 @@ forge-engine
 FORGE registers as an AgentField node (`forge-engine`) and exposes three reasoners:
 
 - `remediate` — Full pipeline: scan → triage → fix → validate
-- `discover` — Scan-only mode (Agents 1-6, no fixes)
+- `discover` — Scan-only mode (Agents 1-6, no fixes). Produces JSON + HTML discovery reports with architecture context, LOC, and remediation plan
 - `scan` — Alias for discover (free tier)
+
+### Discovery Mode
+
+Run discovery-only (scan + triage, no fixes) to produce a findings report:
+
+```bash
+vibe2prod scan ./my-app
+```
+
+This runs Agents 1-6 and generates HTML/JSON reports including architecture context (modules, entry points, data flows, auth boundaries), per-finding ripple tags, and a remediation plan table.
+
+### Hive Discovery (Swarm Mode)
+
+An alternative discovery architecture using a three-layer swarm approach:
+
+```python
+config = {"discovery_mode": "swarm"}  # default: "classic"
+```
+
+Hive replaces the serial Agent 1 → parallel Agents 2-4 flow with: deterministic code graph (Layer 0) → parallel swarm workers per segment (Layer 1) → single Sonnet synthesis (Layer 2). See `doc/hive-discovery-spec.md` for the full design.
 
 ## Configuration
 
@@ -83,3 +115,13 @@ config = {
 ```
 
 Resolution: `defaults` < `models.default` < `models.<role>`
+
+## Resilience
+
+FORGE normalizes LLM outputs before validation to handle model inconsistencies:
+
+- **Category aliases**: LLM-returned categories like `code_patterns`, `error_handling`, `input_validation` are mapped to canonical categories (`quality`, `reliability`, `security`) via `_CATEGORY_ALIASES`
+- **Priority floor**: Priorities < 1 are clamped to 1 before `RemediationPlan` validation
+- **Dependency coercion**: `depends_on_finding_id` returned as a list is coerced to a string
+
+These normalizations are applied at all parsing sites across discovery and triage.

@@ -1,8 +1,19 @@
 # Hive Discovery: Swarm Architecture for FORGE Discovery Phase
 
-**Status:** Proposed
-**Date:** 2026-02-25
+**Status:** Implemented
+**Date:** 2026-02-26
 **Scope:** Discovery (Agents 1-4) + Triage (Agents 5-6) only. Remediation phase (Agents 7-12) is unchanged.
+
+---
+
+## Implementation Notes
+
+Hive Discovery is fully implemented and tested:
+
+- **Core modules**: `forge/swarm/worker.py` (swarm workers), `forge/swarm/synthesizer.py` (Layer 2 synthesis), `forge/swarm/orchestrator.py` (wave orchestration)
+- **Layer 0**: `forge/graph/builder.py` provides deterministic code graph construction (AST parsing, dependency extraction, community detection)
+- **Feature flag**: `config.discovery_mode = "swarm" | "classic"` (default: `"classic"`)
+- **Live E2E tests**: 3 tests in `tests/integration/test_hive_live_e2e.py`, gated behind `--run-live`
 
 ---
 

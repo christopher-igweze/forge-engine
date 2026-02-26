@@ -1,9 +1,9 @@
 # FORGE Engine -- Spec vs Implementation Compliance Report
 
-**Date**: 2026-02-25
+**Date**: 2026-02-26
 **Spec Version**: FORGE Technical Specification v1.0 (February 2026)
 **Repo**: christopher-igweze/forge-engine (main branch)
-**Tests**: 240 passed, 12 skipped (live tests gated behind --run-live)
+**Tests**: 513 passed, 24 skipped (live tests gated behind --run-live)
 
 ---
 
@@ -184,7 +184,7 @@ Study guide for developers, not implementation requirements.
 | Golden test suite with flawed codebases | 4 codebases: express_api, react_app, fastapi_monolith, flask_secrets | PASS |
 | Unit test each agent with fixtures | 9 unit test files (JSON, worktree, schema, config, tier, checkpoint, telemetry, report, context) | PASS |
 | Integration test control loops | 4 files: inner/middle/outer loops + execute_remediation | PASS |
-| End-to-end test full pipeline | `test_live_e2e.py`: 12 live tests across 5 classes | PASS |
+| End-to-end test full pipeline | `test_live_e2e.py`: 12 classic live tests + `test_hive_live_e2e.py`: 3 hive live tests = 15 total | PASS |
 | Cost monitoring per invocation | `MODEL_PRICING` + `AgentInvocationLog` + `cost_summary.json` | PASS |
 | Cost alert (2x threshold) | Not implemented as automated alert | MINOR GAP |
 
@@ -230,7 +230,12 @@ These features were added beyond what the spec required:
 - **Worktree crash recovery** (`recover_worktrees()`): Lock file cleanup, stale worktree detection, automatic startup recovery
 - **LLM escalation agent**: Middle loop uses real LLM agent with heuristic fallback (spec only implied this)
 - **Deployment guide** (`DEPLOYMENT.md`): Full ops documentation including macOS opencode workaround
-- **Live E2E test harness**: 12 tests gated behind `--run-live` for real infrastructure validation
+- **Live E2E test harness**: 15 tests (12 classic + 3 hive) gated behind `--run-live` for real infrastructure validation
+- **Hive Discovery swarm mode** (`forge/swarm/`): Three-layer architecture — deterministic code graph (Layer 0 via `forge/graph/builder.py`) + parallel swarm workers per segment (Layer 1) + single Sonnet 4.6 synthesis (Layer 2). Feature flag: `config.discovery_mode = "swarm" | "classic"`
+- **LLM output normalization**: Category aliases (`_CATEGORY_ALIASES` maps LLM variants like `code_patterns` → `quality`, `error_handling` → `reliability`), priority floor clamping (< 1 → 1), dependency field coercion (list → string). Applied at all 4 parsing sites
+- **Discovery reports** (`forge/execution/report.py`): JSON + HTML reports with architecture context (modules, entry points, key patterns, data flows, auth boundaries, finding hotspots), LOC total, file count, primary language, per-finding ripple tags cross-referencing data flows, and remediation plan table
+- **Auto-telemetry** (`forge/execution/telemetry.py`): `ForgeTelemetry` uses `contextvars.ContextVar` for async-safe singleton access. `AgentAI.run()` auto-logs every LLM call — no manual plumbing needed in reasoners
+- **Agent 1 hybrid approach**: Codebase Analyst uses deterministic file scanning (`os.walk`, LOC counting, language detection) + single LLM call for architectural analysis. `loc_total`, `file_count`, `primary_language` are computed deterministically
 
 ---
 

@@ -226,7 +226,10 @@ Saved at phase boundaries in `<repo>/.forge-checkpoints/`. Auto-cleared on succe
 
 ### Reports
 
-Written to `<repo>/.artifacts/report/`: JSON (always), HTML (always), PDF (if weasyprint installed).
+Written to `<repo>/.artifacts/report/`. Two report types:
+
+- **Discovery Report**: Findings + architecture context (modules, entry points, key patterns, data flows, auth boundaries, finding hotspots) + remediation plan. Includes LOC total, file count, and primary language in the meta bar. Generated as JSON + HTML.
+- **Production Readiness Report**: Production readiness score (0-100) + category scores + tech debt summary + recommendations. Generated as JSON + HTML + optional PDF (if weasyprint installed).
 
 ### Worktrees
 
@@ -289,9 +292,11 @@ git branch --list 'forge/fix-*' | xargs -r git branch -D
       invocations.jsonl
       training_data.jsonl
     report/
-      forge-<run-id>.json
-      forge-<run-id>.html
-      forge-<run-id>.pdf        # if weasyprint installed
+      discovery_report.json     # discovery mode
+      discovery_report.html     # discovery mode
+      production_readiness.json # full pipeline
+      production_readiness.html # full pipeline
+      production_readiness.pdf  # if weasyprint installed
   .forge-checkpoints/           # cleared on success
   .forge-worktrees/             # cleared after run
 ```
