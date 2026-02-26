@@ -38,6 +38,7 @@ from forge.swarm.worker import (
     _format_neighbor_findings,
     _parse_json_response,
     _read_file_safe,
+    _truncate_contents,
 )
 
 
@@ -213,11 +214,10 @@ class TestSecurityWorker:
         w = SecurityWorker(segment_id="seg-test")
         prompt = w.build_system_prompt()
         assert "security" in prompt.lower()
-        assert "Authentication" in prompt
-        assert "SQL injection" in prompt
-        assert "OWASP" in prompt
-        assert "Secrets management" in prompt
+        assert "authentication" in prompt.lower()
+        assert "injection" in prompt.lower()
         assert "XSS" in prompt
+        assert "secrets" in prompt.lower()
 
     def test_system_prompt_requires_json_output(self):
         w = SecurityWorker(segment_id="seg-test")
@@ -294,10 +294,10 @@ class TestQualityWorker:
         w = QualityWorker(segment_id="seg-test")
         prompt = w.build_system_prompt()
         assert "quality" in prompt.lower()
-        assert "Error handling" in prompt
-        assert "duplication" in prompt
-        assert "cyclomatic complexity" in prompt
-        assert "Performance" in prompt
+        assert "error handling" in prompt.lower()
+        assert "duplication" in prompt.lower()
+        assert "cyclomatic complexity" in prompt.lower()
+        assert "performance" in prompt.lower()
 
     def test_system_prompt_requires_json_output(self):
         w = QualityWorker(segment_id="seg-test")
@@ -331,10 +331,10 @@ class TestArchitectureWorker:
         w = ArchitectureWorker(segment_id="seg-test")
         prompt = w.build_system_prompt()
         assert "architecture" in prompt.lower()
-        assert "Coupling" in prompt
-        assert "Layering violations" in prompt
-        assert "Scalability" in prompt
-        assert "Dependency management" in prompt
+        assert "coupling" in prompt.lower()
+        assert "layering" in prompt.lower()
+        assert "scalability" in prompt.lower()
+        assert "dependency management" in prompt.lower()
 
     def test_system_prompt_requires_json_output(self):
         w = ArchitectureWorker(segment_id="seg-test")
@@ -767,3 +767,225 @@ class TestWorkerInitialization:
     def test_segment_id_stored(self):
         w = QualityWorker(segment_id="seg-quality-test")
         assert w.segment_id == "seg-quality-test"
+
+
+# ── TestParseJsonResponseHardened ──────────────────────────────────
+
+
+class TestParseJsonResponseHardened:
+    """Tests for M2.5-specific JSON parser hardening."""
+
+    def test_strips_think_tags(self):
+        raw = '<think>Let me analyze this code...</think>{"findings": [], "summary": "clean"}'
+        result = _parse_json_response(raw)
+        assert result["findings"] == []
+        assert result["summary"] == "clean"
+
+    def test_strips_multiline_think_tags(self):
+        raw = (
+            "<think>\nI need to check for SQL injection.\n"
+            "Step 1: Look at queries...\n"
+            "Step 2: Check sanitization...\n"
+            "</think>\n"
+            '{"findings": [{"id": "SEC-001"}], "summary": "found one"}'
+        )
+        result = _parse_json_response(raw)
+        assert len(result["findings"]) == 1
+        assert result["findings"][0]["id"] == "SEC-001"
+
+    def test_handles_preamble_text(self):
+        raw = 'Here is my analysis:\n\n{"findings": [], "summary": "no issues"}'
+        result = _parse_json_response(raw)
+        assert result["findings"] == []
+
+    def test_handles_postamble_text(self):
+        raw = '{"findings": [], "summary": "clean"}\n\nI hope this helps!'
+        result = _parse_json_response(raw)
+        assert result["findings"] == []
+
+    def test_handles_think_tags_plus_code_fence(self):
+        raw = (
+            "<think>reasoning here</think>\n"
+            "```json\n"
+            '{"findings": [{"id": "F-1"}]}\n'
+            "```"
+        )
+        result = _parse_json_response(raw)
+        assert result["findings"][0]["id"] == "F-1"
+
+    def test_handles_think_tags_plus_preamble(self):
+        raw = (
+            "<think>thinking...</think>\n"
+            "Based on my analysis:\n"
+            '{"findings": [], "summary": "clean"}'
+        )
+        result = _parse_json_response(raw)
+        assert result["findings"] == []
+
+    def test_nested_braces_in_json(self):
+        raw = '{"findings": [{"locations": [{"file_path": "a.py"}]}]}'
+        result = _parse_json_response(raw)
+        assert result["findings"][0]["locations"][0]["file_path"] == "a.py"
+
+
+# ── TestTruncateContents ──────────────────────────────────────────
+
+
+class TestTruncateContents:
+    """Tests for the M2.5 context budget truncation helper."""
+
+    def test_all_fit(self):
+        contents = {"a.py": "aaa", "b.py": "bbb"}
+        result = _truncate_contents(contents, max_chars=100)
+        assert result == contents
+
+    def test_truncates_last_file(self):
+        contents = {"a.py": "aaa", "b.py": "x" * 500}
+        result = _truncate_contents(contents, max_chars=300)
+        assert "a.py" in result
+        assert "b.py" in result
+        assert "truncated for context budget" in result["b.py"]
+
+    def test_drops_file_when_budget_too_small(self):
+        contents = {"a.py": "aaa", "b.py": "x" * 500}
+        result = _truncate_contents(contents, max_chars=10)
+        assert "a.py" in result
+        assert "b.py" not in result
+
+    def test_empty_contents(self):
+        result = _truncate_contents({}, max_chars=100)
+        assert result == {}
+
+
+# ── TestWorkerPromptStructure ─────────────────────────────────────
+
+
+class TestWorkerPromptStructure:
+    """Tests that worker prompts contain required XML sections and content."""
+
+    def test_security_has_xml_sections(self):
+        w = SecurityWorker(segment_id="seg-test")
+        prompt = w.build_system_prompt()
+        assert "<role>" in prompt
+        assert "</role>" in prompt
+        assert "<methodology>" in prompt
+        assert "</methodology>" in prompt
+        assert "<evidence_requirements>" in prompt
+        assert "<hard_exclusions>" in prompt
+        assert "<severity_calibration>" in prompt
+        assert "<output_format>" in prompt
+
+    def test_security_has_sequential_steps(self):
+        w = SecurityWorker(segment_id="seg-test")
+        prompt = w.build_system_prompt()
+        assert "Step 1:" in prompt
+        assert "Step 2:" in prompt
+        assert "Step 3:" in prompt
+        assert "Step 4:" in prompt
+        assert "Step 5:" in prompt
+        assert "Step 6:" in prompt
+
+    def test_security_has_m25_json_instructions(self):
+        w = SecurityWorker(segment_id="seg-test")
+        prompt = w.build_system_prompt()
+        assert "first character must be {" in prompt
+        assert "Do NOT wrap" in prompt
+
+    def test_security_has_data_flow_field(self):
+        w = SecurityWorker(segment_id="seg-test")
+        prompt = w.build_system_prompt()
+        assert '"data_flow"' in prompt
+
+    def test_security_has_actionability_field(self):
+        w = SecurityWorker(segment_id="seg-test")
+        prompt = w.build_system_prompt()
+        assert '"actionability"' in prompt
+        assert "must_fix" in prompt
+        assert "should_fix" in prompt
+
+    def test_quality_has_hard_exclusions(self):
+        w = QualityWorker(segment_id="seg-test")
+        prompt = w.build_system_prompt()
+        assert "<hard_exclusions>" in prompt
+        assert "Missing repository/service abstraction" in prompt
+        assert "5k LOC" in prompt
+        assert "Magic numbers" in prompt
+
+    def test_quality_has_evidence_requirements(self):
+        w = QualityWorker(segment_id="seg-test")
+        prompt = w.build_system_prompt()
+        assert "<evidence_requirements>" in prompt
+        assert "concrete consequence" in prompt.lower()
+
+    def test_architecture_has_scale_awareness(self):
+        w = ArchitectureWorker(segment_id="seg-test")
+        prompt = w.build_system_prompt()
+        assert "<scale_awareness>" in prompt
+        assert "3k LOC" in prompt
+        assert "15k LOC" in prompt
+        assert "Do NOT recommend" in prompt
+
+    def test_architecture_has_evidence_requirements(self):
+        w = ArchitectureWorker(segment_id="seg-test")
+        prompt = w.build_system_prompt()
+        assert "<evidence_requirements>" in prompt
+        assert "Could be better" in prompt
+
+
+# ── TestWorkerContextInjection ────────────────────────────────────
+
+
+class TestWorkerContextInjection:
+    """Tests for pattern_context and project_context injection."""
+
+    def test_security_pattern_context_in_prompt(self):
+        ctx = "## Known Vulnerability Patterns\nVP-001: Client-writable authority"
+        w = SecurityWorker(segment_id="seg-test", pattern_context=ctx)
+        prompt = w.build_system_prompt()
+        assert "VP-001" in prompt
+        assert "Client-writable authority" in prompt
+
+    def test_security_project_context_in_prompt(self):
+        ctx = "## Project Context\nProject Stage: MVP"
+        w = SecurityWorker(segment_id="seg-test", project_context=ctx)
+        prompt = w.build_system_prompt()
+        assert "Project Stage: MVP" in prompt
+
+    def test_security_both_contexts_in_prompt(self):
+        pattern = "## Patterns\nVP-001"
+        project = "## Context\nMVP stage"
+        w = SecurityWorker(segment_id="seg-test", pattern_context=pattern, project_context=project)
+        prompt = w.build_system_prompt()
+        assert "VP-001" in prompt
+        assert "MVP stage" in prompt
+        # project_context should appear before pattern_context
+        assert prompt.index("MVP stage") < prompt.index("VP-001")
+
+    def test_security_no_context_still_valid(self):
+        w = SecurityWorker(segment_id="seg-test")
+        prompt = w.build_system_prompt()
+        assert "<role>" in prompt
+        assert "</output_format>" in prompt
+
+    def test_quality_project_context_in_prompt(self):
+        ctx = "## Project Context\nTeam Size: 1"
+        w = QualityWorker(segment_id="seg-test", project_context=ctx)
+        prompt = w.build_system_prompt()
+        assert "Team Size: 1" in prompt
+
+    def test_architecture_project_context_in_prompt(self):
+        ctx = "## Project Context\nProject Stage: early_product"
+        w = ArchitectureWorker(segment_id="seg-test", project_context=ctx)
+        prompt = w.build_system_prompt()
+        assert "early_product" in prompt
+
+    def test_task_prompt_includes_methodology_reference(self):
+        w = SecurityWorker(segment_id="seg-test")
+        ctx = SegmentContext(
+            segment=Segment(id="seg-test", label="test", files=["app.py"]),
+            file_contents={"app.py": "code"},
+        )
+        prompt = w.build_task_prompt(ctx, wave=1, repo_path="/tmp/repo")
+        assert "step-by-step methodology" in prompt
+        assert "data_flow" in prompt
+        assert "confidence >= 0.7" in prompt
