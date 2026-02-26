@@ -119,6 +119,9 @@ class ForgeConfig(BaseModel):
     # ── Vulnerability Pattern Library ────────────────────────────
     pattern_library_path: str = ""  # Custom path; empty = use built-in library
 
+    # ── Project Context ───────────────────────────────────────────
+    project_context: dict = {}  # User-provided project context for scan personalization
+
     def resolved_models(self) -> dict[str, str]:
         """Resolve model fields using the standard cascade.
 

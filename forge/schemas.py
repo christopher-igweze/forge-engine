@@ -209,6 +209,8 @@ class AuditFinding(BaseModel):
     dedup_key: str = ""  # used by Fix Strategist for deduplication
     pattern_id: str = ""  # links to VulnerabilityPattern.id (e.g. "VP-001")
     pattern_slug: str = ""  # links to VulnerabilityPattern.slug
+    data_flow: str = ""  # source -> transformation -> sink trace
+    actionability: str = ""  # must_fix | should_fix | consider | informational
 
 
 # ── Agent 2: Security Auditor ─────────────────────────────────────────
