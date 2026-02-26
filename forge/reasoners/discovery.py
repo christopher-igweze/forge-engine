@@ -245,6 +245,7 @@ async def _run_single_security_pass(
     model: str,
     ai_provider: str,
     pattern_context: str = "",
+    project_context: str = "",
 ) -> SecurityAuditResult:
     """Execute a single security audit pass."""
     logger.info("Agent 2: Security pass %s starting", audit_pass.value)
@@ -271,6 +272,7 @@ async def _run_single_security_pass(
         codebase_map_json=codebase_map_json,
         relevant_file_contents=file_contents,
         pattern_context=pattern_context,
+        project_context=project_context,
     )
 
     system_prompt = SECURITY_PASS_PROMPTS[audit_pass]
@@ -329,6 +331,7 @@ async def run_security_auditor(
     ai_provider: str = "openrouter_direct",
     parallel: bool = True,
     pattern_library_path: str = "",
+    project_context: str = "",
 ) -> dict:
     """Agent 2: Run 3 security audit passes (optionally in parallel).
 
@@ -352,6 +355,7 @@ async def run_security_auditor(
                 _run_single_security_pass(
                     p, repo_path, cm, model, ai_provider,
                     pattern_context=pattern_context,
+                    project_context=project_context,
                 )
                 for p in security_passes
             ],
@@ -374,6 +378,7 @@ async def run_security_auditor(
             result = await _run_single_security_pass(
                 p, repo_path, cm, model, ai_provider,
                 pattern_context=pattern_context,
+                project_context=project_context,
             )
             pass_results.append(result)
 
