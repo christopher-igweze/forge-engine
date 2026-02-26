@@ -61,6 +61,9 @@ def generate_discovery_report(
         "phase": "discovery",
         "duration_seconds": round(duration_seconds, 1),
         "cost_usd": round(cost_usd, 4),
+        "loc_total": codebase_map.loc_total if codebase_map else 0,
+        "file_count": codebase_map.file_count if codebase_map else 0,
+        "primary_language": codebase_map.primary_language if codebase_map else "",
         "total_findings": len(findings),
         "severity_breakdown": dict(sev_counts),
         "category_breakdown": dict(cat_counts),
@@ -333,6 +336,8 @@ def _render_discovery_html(
 
     <div class="meta">
         <span>{total} findings</span>
+        {f'<span>{codebase_map.loc_total:,} LOC</span>' if codebase_map and codebase_map.loc_total else ''}
+        {f'<span>{codebase_map.file_count} files</span>' if codebase_map and codebase_map.file_count else ''}
         <span>{duration_seconds:.0f}s runtime</span>
         <span>${cost_usd:.4f} cost</span>
     </div>
