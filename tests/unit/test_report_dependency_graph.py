@@ -7,11 +7,13 @@ import pytest
 
 from forge.execution.report import (
     _build_graph_report_data,
+    _build_pattern_library_data,
     _load_graph_data,
     _render_blast_radius,
     _render_dependency_graph,
     _render_import_chains,
     _render_interconnection_table,
+    _render_methodology_section,
     _render_segment_network_svg,
     generate_discovery_report,
 )
@@ -537,3 +539,110 @@ class TestDiscoveryReportWithGraph:
 
         assert data["dependency_graph"] is not None
         assert data["dependency_graph"]["total_segments"] == 2
+
+
+# ── Analysis Methodology section ──────────────────────────────────────
+
+
+class TestRenderMethodologySection:
+    def test_renders_pattern_table(self):
+        findings = [AuditFinding(
+            id="F-001",
+            title="Test",
+            description="Test",
+            category=FindingCategory.SECURITY,
+            severity=FindingSeverity.HIGH,
+            locations=[],
+            suggested_fix="",
+        )]
+        html = _render_methodology_section(findings)
+        assert "Analysis Methodology" in html
+        assert "VP-001" in html
+        assert "VP-002" in html
+        assert "VP-003" in html
+
+    def test_shows_hit_count(self):
+        findings = [AuditFinding(
+            id="F-001",
+            title="Test",
+            description="Test",
+            category=FindingCategory.SECURITY,
+            severity=FindingSeverity.HIGH,
+            locations=[],
+            suggested_fix="",
+            pattern_id="VP-001",
+        )]
+        html = _render_methodology_section(findings)
+        assert "<strong>1</strong>" in html
+
+    def test_empty_findings_still_renders(self):
+        html = _render_methodology_section([])
+        assert "Analysis Methodology" in html
+
+
+class TestBuildPatternLibraryData:
+    def test_returns_pattern_data(self):
+        findings = [AuditFinding(
+            id="F-001",
+            title="Test",
+            description="Test",
+            category=FindingCategory.SECURITY,
+            severity=FindingSeverity.HIGH,
+            locations=[],
+            suggested_fix="",
+            pattern_id="VP-001",
+        )]
+        data = _build_pattern_library_data(findings)
+        assert data is not None
+        assert data["patterns_checked"] == 3
+        assert data["pattern_hits"] == {"VP-001": 1}
+        assert len(data["patterns"]) == 3
+
+    def test_no_hits(self):
+        data = _build_pattern_library_data([])
+        assert data is not None
+        assert data["pattern_hits"] == {}
+
+
+class TestDiscoveryReportWithMethodology:
+    def test_html_includes_methodology(self, tmp_path):
+        findings = [AuditFinding(
+            id="F-001",
+            title="Test",
+            description="Test",
+            category=FindingCategory.SECURITY,
+            severity=FindingSeverity.HIGH,
+            locations=[],
+            suggested_fix="",
+        )]
+        paths = generate_discovery_report(
+            findings=findings,
+            plan=None,
+            artifacts_dir=str(tmp_path),
+            run_id="test-methodology",
+        )
+        with open(paths["html"]) as f:
+            html = f.read()
+        assert "Analysis Methodology" in html
+        assert "VP-001" in html
+
+    def test_json_includes_pattern_library(self, tmp_path):
+        findings = [AuditFinding(
+            id="F-001",
+            title="Test",
+            description="Test",
+            category=FindingCategory.SECURITY,
+            severity=FindingSeverity.HIGH,
+            locations=[],
+            suggested_fix="",
+        )]
+        paths = generate_discovery_report(
+            findings=findings,
+            plan=None,
+            artifacts_dir=str(tmp_path),
+            run_id="test-patterns",
+        )
+        with open(paths["json"]) as f:
+            data = json.load(f)
+        assert "pattern_library" in data
+        assert data["pattern_library"]["patterns_checked"] == 3

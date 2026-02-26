@@ -80,6 +80,7 @@ def generate_discovery_report(
         "remediation_plan": plan.model_dump(mode="json") if plan else None,
         "codebase_map": codebase_map.model_dump(mode="json") if codebase_map else None,
         "dependency_graph": _build_graph_report_data(graph_data) if graph_data else None,
+        "pattern_library": _build_pattern_library_data(findings),
     }
 
     # JSON report
@@ -209,6 +210,9 @@ def _render_discovery_html(
     graph_html = ""
     if graph_data:
         graph_html = _render_dependency_graph(graph_data, findings)
+
+    # ── Analysis Methodology section ──────────────────────────────
+    methodology_html = _render_methodology_section(findings)
 
     # Findings table rows
     findings_rows = ""
@@ -377,6 +381,8 @@ def _render_discovery_html(
     {arch_html}
 
     {graph_html}
+
+    {methodology_html}
 
     <h2>All Findings</h2>
     <table>
@@ -1196,3 +1202,88 @@ def _render_import_chains(
         </div>"""
 
     return f'<div class="chain-list">{rows}</div>'
+
+
+# ── Analysis Methodology section ────────────────────────────────────────
+
+
+def _build_pattern_library_data(findings: list[AuditFinding]) -> dict | None:
+    """Build pattern library summary for JSON report."""
+    try:
+        from forge.patterns.loader import PatternLibrary
+
+        library = PatternLibrary.load_default()
+    except Exception:
+        return None
+
+    if not library:
+        return None
+
+    pattern_hits: dict[str, int] = {}
+    for f in findings:
+        if f.pattern_id:
+            pattern_hits[f.pattern_id] = pattern_hits.get(f.pattern_id, 0) + 1
+
+    return {
+        "patterns_checked": len(library),
+        "pattern_hits": pattern_hits,
+        "patterns": [
+            {
+                "id": p.id,
+                "name": p.name,
+                "severity": p.severity_default,
+                "cwe_ids": p.cwe_ids,
+                "hits": pattern_hits.get(p.id, 0),
+            }
+            for p in library.all()
+        ],
+    }
+
+
+def _render_methodology_section(findings: list[AuditFinding]) -> str:
+    """Render the Analysis Methodology section showing patterns checked."""
+    try:
+        from forge.patterns.loader import PatternLibrary
+
+        library = PatternLibrary.load_default()
+    except Exception:
+        return ""
+
+    if not library:
+        return ""
+
+    # Count pattern hits in findings
+    pattern_hits: dict[str, int] = {}
+    for f in findings:
+        if f.pattern_id:
+            pattern_hits[f.pattern_id] = pattern_hits.get(f.pattern_id, 0) + 1
+
+    rows = ""
+    for p in library.all():
+        hits = pattern_hits.get(p.id, 0)
+        status_cls = "detected" if hits > 0 else "clear"
+        cwes = ", ".join(p.cwe_ids) if p.cwe_ids else "&mdash;"
+        rows += f"""
+            <tr class="{status_cls}">
+                <td>{_esc(p.id)}</td>
+                <td>{_esc(p.name)}</td>
+                <td><span class="sev-badge {p.severity_default}">{p.severity_default}</span></td>
+                <td>{cwes}</td>
+                <td>{"<strong>" + str(hits) + "</strong>" if hits else "0"}</td>
+            </tr>"""
+
+    return f"""
+    <div class="section">
+        <h2>Analysis Methodology</h2>
+        <p>This scan checked for <strong>{len(library)}</strong> known vulnerability
+        patterns from the FORGE Pattern Library, in addition to standard agent-driven
+        security, quality, and architecture analysis.</p>
+        <p>FORGE performs <strong>100% static analysis + LLM reasoning</strong> &mdash;
+        no runtime tests, load tests, or UI tests are executed.</p>
+        <table>
+            <thead>
+                <tr><th>ID</th><th>Pattern</th><th>Severity</th><th>CWEs</th><th>Hits</th></tr>
+            </thead>
+            <tbody>{rows}</tbody>
+        </table>
+    </div>"""
