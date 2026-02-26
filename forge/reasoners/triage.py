@@ -287,9 +287,16 @@ async def run_fix_strategist(
 
     # Normalize plan items before validation — LLMs sometimes return priority=0
     for item in data.get("items", []):
-        if isinstance(item, dict) and isinstance(item.get("priority"), int):
-            if item["priority"] < 1:
+        if isinstance(item, dict):
+            if isinstance(item.get("priority"), int) and item["priority"] < 1:
                 item["priority"] = 1
+
+    # Normalize dependencies — LLMs sometimes return depends_on_finding_id as list
+    for dep in data.get("dependencies", []):
+        if isinstance(dep, dict):
+            val = dep.get("depends_on_finding_id")
+            if isinstance(val, list):
+                dep["depends_on_finding_id"] = val[0] if val else ""
 
     # Parse into RemediationPlan
     try:
