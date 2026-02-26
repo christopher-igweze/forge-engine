@@ -578,6 +578,7 @@ class TestOrchestratorInit:
         assert orch.target_segments == 5
         assert orch.enable_wave2 is True
         assert orch.worker_types == ["security", "quality", "architecture"]
+        assert orch.project_context == {}
 
     def test_custom_values(self):
         from forge.swarm.orchestrator import HiveOrchestrator
@@ -611,6 +612,19 @@ class TestOrchestratorInit:
 
         orch = HiveOrchestrator(repo_path="/tmp/repo", artifacts_dir="/custom/artifacts")
         assert orch.artifacts_dir == "/custom/artifacts"
+
+    def test_project_context_stored(self):
+        from forge.swarm.orchestrator import HiveOrchestrator
+
+        ctx = {"project_stage": "mvp", "team_size": 1}
+        orch = HiveOrchestrator(repo_path="/tmp/repo", project_context=ctx)
+        assert orch.project_context == ctx
+
+    def test_project_context_none_defaults_to_empty_dict(self):
+        from forge.swarm.orchestrator import HiveOrchestrator
+
+        orch = HiveOrchestrator(repo_path="/tmp/repo", project_context=None)
+        assert orch.project_context == {}
 
 
 # ── TestCreateWorkers ───────────────────────────────────────────────
@@ -671,3 +685,54 @@ class TestCreateWorkers:
 
         workers = orch._create_workers()
         assert len(workers) == 1  # Only security, invalid_type skipped
+
+    def test_project_context_passed_to_all_workers(self):
+        from forge.swarm.orchestrator import HiveOrchestrator
+        from forge.graph.models import CodeGraph, Segment
+
+        ctx = {"project_stage": "mvp", "team_size": 1, "vision_summary": "Test app"}
+        orch = HiveOrchestrator(repo_path="/tmp/repo", project_context=ctx)
+        orch._graph = CodeGraph(
+            segments=[Segment(id="seg-0", label="module0", files=["a.py"])]
+        )
+
+        workers = orch._create_workers()
+        assert len(workers) == 3  # 1 segment * 3 types
+
+        # All workers should have project context in their prompt
+        for worker in workers:
+            prompt = worker.build_system_prompt()
+            assert "project_context" in prompt.lower() or "Project Context" in prompt
+
+    def test_empty_project_context_not_injected(self):
+        from forge.swarm.orchestrator import HiveOrchestrator
+        from forge.graph.models import CodeGraph, Segment
+
+        orch = HiveOrchestrator(repo_path="/tmp/repo", project_context={})
+        orch._graph = CodeGraph(
+            segments=[Segment(id="seg-0", label="module0", files=["a.py"])]
+        )
+
+        workers = orch._create_workers()
+        # Workers should NOT have project_context in their prompts
+        for worker in workers:
+            prompt = worker.build_system_prompt()
+            assert "<project_context>" not in prompt
+
+    def test_build_project_context_returns_string(self):
+        from forge.swarm.orchestrator import HiveOrchestrator
+
+        ctx = {"project_stage": "growth", "team_size": 5}
+        orch = HiveOrchestrator(repo_path="/tmp/repo", project_context=ctx)
+
+        result = orch._build_project_context()
+        assert isinstance(result, str)
+        assert "<project_context>" in result
+        assert "Growth Stage" in result
+
+    def test_build_project_context_empty_returns_empty(self):
+        from forge.swarm.orchestrator import HiveOrchestrator
+
+        orch = HiveOrchestrator(repo_path="/tmp/repo", project_context={})
+        result = orch._build_project_context()
+        assert result == ""
