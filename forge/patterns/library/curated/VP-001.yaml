@@ -1,0 +1,130 @@
+id: VP-001
+name: Client-writable server-authority columns
+slug: client-writable-server-authority
+description: >
+  BaaS platforms (Supabase, Firebase, PocketBase, Appwrite) give authenticated
+  users direct database access via client SDKs. If RLS policies or security
+  rules don't restrict WHICH columns can be written, a user can PATCH
+  role/tier/subscription fields directly — bypassing all payment and
+  authorization logic.
+
+category: security
+severity_default: critical
+cwe_ids:
+  - CWE-285
+  - CWE-639
+  - CWE-863
+owasp_refs:
+  - "A01:2021"
+
+tier: hybrid
+deterministic_threshold: 0.7
+
+signals:
+  - signal_type: dependency
+    description: BaaS client SDK detected
+    package_names:
+      - "@supabase/supabase-js"
+      - supabase
+      - firebase
+      - firebase-admin
+      - pocketbase
+      - "@pocketbase/js-sdk"
+      - appwrite
+    weight: 0.3
+    is_positive: true
+
+  - signal_type: regex
+    description: Client-side mutation on role/tier/subscription columns
+    patterns:
+      - "\\.(update|insert|upsert)\\s*\\([^)]*(?:role|tier|subscription|plan|is_admin|is_premium|permissions)"
+      - "\\.from\\(['\"]\\w+['\"]\\)\\s*\\.(update|insert|upsert)\\("
+    file_globs:
+      - "*.ts"
+      - "*.tsx"
+      - "*.js"
+      - "*.jsx"
+      - "*.svelte"
+      - "*.vue"
+    weight: 0.4
+    is_positive: true
+
+  - signal_type: regex
+    description: Role/tier stored in localStorage or sessionStorage
+    patterns:
+      - "(localStorage|sessionStorage)\\.(get|set)Item\\(['\"](?:role|tier|subscription|plan|is_admin|is_premium)"
+    file_globs:
+      - "*.ts"
+      - "*.tsx"
+      - "*.js"
+      - "*.jsx"
+    weight: 0.3
+    is_positive: true
+
+  - signal_type: file_presence
+    description: No server functions directory present
+    patterns:
+      - supabase/functions/
+      - pages/api/
+      - app/api/
+      - netlify/functions/
+      - api/
+      - server/
+    weight: 0.2
+    is_positive: false
+
+  - signal_type: regex
+    description: Frontend-only role checking
+    patterns:
+      - "if\\s*\\(?\\s*(?:user|currentUser|session|profile)\\s*[\\.\\?]+\\s*(?:role|tier|is_admin|subscription)\\s*(?:===|==|!==|!=)"
+    file_globs:
+      - "*.ts"
+      - "*.tsx"
+      - "*.js"
+      - "*.jsx"
+    weight: 0.2
+    is_positive: true
+
+llm_guidance:
+  reasoning_prompt: >
+    Check whether authenticated users can write to server-authority columns
+    (role, tier, subscription, permissions) via the client SDK. Look for
+    direct .update() calls with these fields, lack of RLS column
+    restrictions, and absence of server-side intermediary functions.
+  key_questions:
+    - Can the client SDK reach the mutation endpoint for auth-relevant tables?
+    - Do RLS policies or Firestore rules restrict WHICH columns can be written?
+    - Is there a server-side function between client and DB for role/tier writes?
+    - Does frontend code construct objects with role/tier/subscription fields?
+    - Are subscription checks performed server-side or only in the client?
+  technology_variants:
+    supabase: "Check RLS in migrations/, edge functions in supabase/functions/"
+    firebase: "Check firestore.rules field-level restrictions, Cloud Functions"
+    pocketbase: "Check collection API rules for field restrictions"
+    generic: "Any server layer between client and DB for auth-relevant columns?"
+  examples:
+    - code: "await supabase.from('profiles').update({ subscription_status: 'premium' })"
+      is_vulnerable: true
+      explanation: "Direct client write to subscription_status with no server intermediary"
+    - code: "const { error } = await supabase.from('users').update({ role: 'admin' }).eq('id', userId)"
+      is_vulnerable: true
+      explanation: "Client directly sets role column — RLS may not restrict column-level writes"
+  counter_examples:
+    - code: "const { data } = await supabase.from('profiles').select('subscription_status')"
+      is_vulnerable: false
+      explanation: "Read-only query, not a mutation"
+    - code: "await fetch('/api/upgrade', { method: 'POST', body: JSON.stringify({ plan: 'premium' }) })"
+      is_vulnerable: false
+      explanation: "Mutation goes through a server endpoint, not directly to the database"
+
+fix_strategy: >
+  Move authority-column writes to server-side functions (edge functions,
+  API routes, Cloud Functions). Add column-level RLS or security rules
+  that deny client writes to role/tier/subscription fields. Validate
+  all mutation payloads server-side before persisting.
+fix_examples:
+  supabase: "Create edge function for profile updates; add RLS policy restricting column writes"
+  firebase: "Use Cloud Functions for role changes; add field-level firestore.rules"
+  generic: "Add server middleware that validates and restricts mutation payloads"
+
+source: curated

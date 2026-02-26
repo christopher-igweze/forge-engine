@@ -1,0 +1,91 @@
+id: VP-002
+name: Client-only premium feature gating
+slug: client-only-premium-gating
+description: >
+  Premium features are gated only by client-side checks (localStorage,
+  sessionStorage, or frontend state). An attacker can bypass these checks
+  by modifying local storage values or frontend state directly, gaining
+  access to premium features without payment.
+
+category: security
+severity_default: high
+cwe_ids:
+  - CWE-602
+  - CWE-841
+owasp_refs:
+  - "A04:2021"
+
+tier: hybrid
+deterministic_threshold: 0.7
+
+signals:
+  - signal_type: regex
+    description: Subscription/premium check via localStorage or sessionStorage
+    patterns:
+      - "(localStorage|sessionStorage)\\.(getItem|setItem)\\(['\"](?:subscription|plan|tier|premium|isPro|isPaid)"
+      - "JSON\\.parse\\((localStorage|sessionStorage)\\.getItem\\(['\"](?:user|profile|subscription)"
+    file_globs:
+      - "*.ts"
+      - "*.tsx"
+      - "*.js"
+      - "*.jsx"
+    weight: 0.4
+    is_positive: true
+
+  - signal_type: regex
+    description: Frontend-only route guard checking subscription tier
+    patterns:
+      - "(?:isPremium|isPro|subscription|tier)\\s*(?:===|==|!==|!=)\\s*['\"](?:premium|pro|enterprise|paid)"
+      - "if\\s*\\(\\s*!\\s*(?:isPremium|isPro|isSubscribed|hasPremium)"
+    file_globs:
+      - "*.ts"
+      - "*.tsx"
+      - "*.js"
+      - "*.jsx"
+    weight: 0.4
+    is_positive: true
+
+  - signal_type: file_presence
+    description: No server middleware or API route for subscription validation
+    patterns:
+      - middleware/
+      - pages/api/subscription
+      - app/api/subscription
+      - api/subscription
+    weight: 0.2
+    is_positive: false
+
+llm_guidance:
+  reasoning_prompt: >
+    Determine whether premium/paid feature access is validated server-side
+    or only checked in the frontend. Look for localStorage-based subscription
+    checks, client-side route guards without corresponding server validation,
+    and absence of middleware that verifies subscription status.
+  key_questions:
+    - Are premium features gated by server-side middleware or just frontend checks?
+    - Can a user modify localStorage/cookies to bypass feature gates?
+    - Is subscription status verified on each API request or only at login?
+    - Do API endpoints that serve premium data check subscription independently?
+  technology_variants:
+    supabase: "Check if RLS policies filter by subscription_status column"
+    firebase: "Check if Cloud Functions verify subscription before returning premium data"
+    generic: "Is there server middleware that validates subscription on premium API routes?"
+  examples:
+    - code: "if (localStorage.getItem('plan') === 'premium') { showPremiumFeature() }"
+      is_vulnerable: true
+      explanation: "Feature gate relies entirely on client-controlled localStorage value"
+  counter_examples:
+    - code: "const { data } = await api.get('/premium-content', { headers: { Authorization: token } })"
+      is_vulnerable: false
+      explanation: "Server endpoint handles authorization; client just displays the result"
+
+fix_strategy: >
+  Move subscription validation to server-side middleware. Every API endpoint
+  serving premium data should independently verify the user's subscription
+  status from the database, not from client-provided state.
+fix_examples:
+  supabase: "Add RLS policy: subscription_status = 'premium' on premium data tables"
+  firebase: "Add Cloud Function middleware that checks Firestore subscription doc"
+  generic: "Add server middleware that queries subscription status on every premium API call"
+
+source: curated

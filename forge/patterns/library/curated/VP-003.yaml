@@ -1,0 +1,109 @@
+id: VP-003
+name: Unprotected admin/internal endpoints
+slug: unprotected-admin-endpoints
+description: >
+  Admin or internal endpoints (e.g. /admin, /internal, /api/admin) are
+  exposed without authentication middleware, role-based access control,
+  or network-level restrictions. These endpoints often provide privileged
+  operations like user management, data export, or configuration changes.
+
+category: security
+severity_default: high
+cwe_ids:
+  - CWE-306
+  - CWE-862
+owasp_refs:
+  - "A01:2021"
+  - "A04:2021"
+
+tier: hybrid
+deterministic_threshold: 0.7
+
+signals:
+  - signal_type: regex
+    description: Admin or internal route definitions
+    patterns:
+      - "(?:router|app|server)\\.(get|post|put|patch|delete)\\s*\\(['\"]\\s*/(?:admin|internal|dashboard|backoffice)"
+      - "@(?:app|router)\\.(?:route|get|post)\\(['\"]\\s*/(?:admin|internal)"
+      - "path:\\s*['\"]/?(?:admin|internal|dashboard)"
+    file_globs:
+      - "*.ts"
+      - "*.tsx"
+      - "*.js"
+      - "*.jsx"
+      - "*.py"
+    weight: 0.4
+    is_positive: true
+
+  - signal_type: regex
+    description: Route definition without auth middleware
+    patterns:
+      - "\\.(get|post|put|delete)\\(['\"][^'\"]*admin[^'\"]*['\"]\\s*,\\s*(?:async\\s+)?(?:function|\\(|\\w+\\s*=>)"
+    file_globs:
+      - "*.ts"
+      - "*.tsx"
+      - "*.js"
+      - "*.jsx"
+    weight: 0.3
+    is_positive: true
+
+  - signal_type: regex
+    description: Privileged operations (user management, data export, config)
+    patterns:
+      - "(?:deleteUser|removeUser|banUser|exportData|bulkDelete|setConfig|updateConfig|resetPassword)"
+      - "\\.(destroy|truncate|drop)\\s*\\("
+    file_globs:
+      - "*.ts"
+      - "*.tsx"
+      - "*.js"
+      - "*.jsx"
+      - "*.py"
+    weight: 0.3
+    is_positive: true
+
+  - signal_type: file_presence
+    description: No auth middleware directory or file
+    patterns:
+      - middleware/auth
+      - lib/auth
+      - utils/auth
+      - guards/
+    weight: 0.2
+    is_positive: false
+
+llm_guidance:
+  reasoning_prompt: >
+    Check whether admin, internal, or dashboard routes are protected by
+    authentication and authorization middleware. Look for route handlers
+    that perform privileged operations without verifying the caller's
+    identity or role. Check if admin routes are in a separate router
+    with auth middleware applied.
+  key_questions:
+    - Do admin routes have authentication middleware applied?
+    - Is there role-based access control (e.g. isAdmin check) on privileged routes?
+    - Are internal endpoints protected by network-level restrictions?
+    - Can unauthenticated users reach admin route handlers directly?
+    - Are there admin API endpoints without CORS restrictions?
+  technology_variants:
+    supabase: "Check if admin routes use supabase.auth.getUser() and verify admin role"
+    firebase: "Check if admin routes verify Firebase Auth custom claims (admin: true)"
+    generic: "Is there auth middleware applied to all /admin/* routes?"
+  examples:
+    - code: "app.get('/admin/users', async (req, res) => { const users = await db.users.findAll(); res.json(users) })"
+      is_vulnerable: true
+      explanation: "Admin endpoint returns all users with no authentication check"
+  counter_examples:
+    - code: "app.get('/admin/users', requireAuth, requireRole('admin'), async (req, res) => { ... })"
+      is_vulnerable: false
+      explanation: "Route has both authentication and role-based authorization middleware"
+
+fix_strategy: >
+  Apply authentication middleware to all admin routes. Add role-based
+  authorization that verifies the caller has admin privileges. Consider
+  network-level restrictions (IP allowlisting) for internal endpoints.
+fix_examples:
+  supabase: "Add RLS policies requiring admin role; use edge functions with auth checks"
+  firebase: "Verify admin custom claim in Cloud Functions before processing"
+  generic: "Add requireAuth + requireRole('admin') middleware to all /admin routes"
+
+source: curated
