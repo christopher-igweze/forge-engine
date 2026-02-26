@@ -333,6 +333,23 @@ async def run_standalone(
         except Exception as e:
             logger.warning("Discovery report generation failed: %s", e)
 
+    # Run pattern extraction pipeline (learning loop)
+    if state.all_findings and state.artifacts_dir:
+        try:
+            from forge.patterns.extractor import (
+                append_findings_history,
+                update_pattern_prevalence,
+            )
+            from forge.patterns.loader import PatternLibrary
+
+            library = PatternLibrary.load_default()
+            append_findings_history(state.all_findings, state.artifacts_dir)
+            prevalence = update_pattern_prevalence(state.all_findings, library)
+            if prevalence:
+                logger.info("Pattern prevalence: %s", prevalence)
+        except Exception as e:
+            logger.warning("Pattern extraction failed (non-fatal): %s", e)
+
     state.finished_at = __import__("datetime").datetime.now(
         __import__("datetime").timezone.utc
     )
