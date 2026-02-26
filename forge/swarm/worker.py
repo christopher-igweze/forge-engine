@@ -228,8 +228,18 @@ class SecurityWorker(SwarmWorker):
 
     worker_type = "security"
 
+    def __init__(
+        self,
+        segment_id: str,
+        model: str = "minimax/minimax-m2.5",
+        ai_provider: str = "openrouter_direct",
+        pattern_context: str = "",
+    ):
+        super().__init__(segment_id, model, ai_provider)
+        self._pattern_context = pattern_context
+
     def build_system_prompt(self) -> str:
-        return """You are a security auditor analyzing a code segment for vulnerabilities.
+        base = """You are a security auditor analyzing a code segment for vulnerabilities.
 
 Focus areas:
 - Authentication/authorization flaws
@@ -253,11 +263,16 @@ Output JSON with this structure:
       "suggested_fix": "How to fix this",
       "confidence": 0.8,
       "cwe_id": "CWE-XXX",
-      "owasp_ref": "A01:2021"
+      "owasp_ref": "A01:2021",
+      "pattern_id": "",
+      "pattern_slug": ""
     }
   ],
   "summary": "Brief summary of security posture"
 }"""
+        if self._pattern_context:
+            base += f"\n\n{self._pattern_context}"
+        return base
 
     def build_task_prompt(self, context: SegmentContext, wave: int, repo_path: str) -> str:
         parts = [

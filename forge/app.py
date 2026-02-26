@@ -466,6 +466,7 @@ async def _run_discovery(
         model=resolved_models.get("security_auditor_model", "anthropic/claude-haiku-4.5"),
         ai_provider=cfg.provider_for_role("security_auditor"),
         parallel=cfg.enable_parallel_audit,
+        pattern_library_path=cfg.pattern_library_path,
     ))
 
     # Agent 3: Quality Auditor
@@ -555,6 +556,7 @@ async def _run_swarm_discovery(
         target_segments=cfg.swarm_target_segments,
         enable_wave2=cfg.swarm_enable_wave2,
         worker_types=cfg.swarm_worker_types,
+        pattern_library_path=cfg.pattern_library_path,
     )
 
     if not isinstance(hive_result, dict):

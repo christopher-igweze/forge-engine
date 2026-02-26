@@ -38,7 +38,9 @@ Respond with a JSON object matching this schema:
       "suggested_fix": "Add the requireAuth middleware before the handler...",
       "confidence": 0.95,
       "cwe_id": "CWE-306",
-      "owasp_ref": "A01:2021"
+      "owasp_ref": "A01:2021",
+      "pattern_id": "",
+      "pattern_slug": ""
     }
   ],
   "pass_summary": "Found 3 critical and 2 high severity issues in auth flows.",
@@ -129,6 +131,7 @@ def security_audit_task_prompt(
     codebase_map_json: str,
     relevant_file_contents: str,
     repo_url: str = "",
+    pattern_context: str = "",
 ) -> str:
     """Build the task prompt for a single security audit pass.
 
@@ -137,6 +140,7 @@ def security_audit_task_prompt(
         codebase_map_json: Serialized CodebaseMap from Agent 1.
         relevant_file_contents: Source code of files relevant to this pass.
         repo_url: Repository URL for context.
+        pattern_context: Vulnerability pattern context from the pattern library.
     """
     parts = []
 
@@ -145,6 +149,9 @@ def security_audit_task_prompt(
 
     parts.append("## Codebase Structure\n")
     parts.append(codebase_map_json)
+
+    if pattern_context:
+        parts.append(f"\n\n{pattern_context}")
 
     parts.append(f"\n\n## Source Code for {audit_pass.value} Analysis\n")
     parts.append(relevant_file_contents)

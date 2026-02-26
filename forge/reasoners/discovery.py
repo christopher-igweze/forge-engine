@@ -212,12 +212,39 @@ async def run_codebase_analyst(
 # ── Agent 2: Security Auditor ─────────────────────────────────────────
 
 
+def _load_pattern_context(codebase_map: dict, pattern_library_path: str = "") -> str:
+    """Load pattern library and build LLM context string."""
+    try:
+        from forge.patterns.context import (
+            build_pattern_context_for_prompt,
+            extract_tech_hints_from_codebase_map,
+        )
+        from forge.patterns.loader import PatternLibrary
+
+        if pattern_library_path:
+            library = PatternLibrary.load_from_directory(pattern_library_path)
+        else:
+            library = PatternLibrary.load_default()
+
+        if not library:
+            return ""
+
+        tech_hints = extract_tech_hints_from_codebase_map(codebase_map)
+        return build_pattern_context_for_prompt(
+            library, category="security", tech_hints=tech_hints,
+        )
+    except Exception as exc:
+        logger.warning("Failed to load pattern library: %s", exc)
+        return ""
+
+
 async def _run_single_security_pass(
     audit_pass: AuditPassType,
     repo_path: str,
     codebase_map: CodebaseMap,
     model: str,
     ai_provider: str,
+    pattern_context: str = "",
 ) -> SecurityAuditResult:
     """Execute a single security audit pass."""
     logger.info("Agent 2: Security pass %s starting", audit_pass.value)
@@ -243,6 +270,7 @@ async def _run_single_security_pass(
         audit_pass=audit_pass,
         codebase_map_json=codebase_map_json,
         relevant_file_contents=file_contents,
+        pattern_context=pattern_context,
     )
 
     system_prompt = SECURITY_PASS_PROMPTS[audit_pass]
@@ -300,6 +328,7 @@ async def run_security_auditor(
     model: str = "anthropic/claude-haiku-4.5",
     ai_provider: str = "openrouter_direct",
     parallel: bool = True,
+    pattern_library_path: str = "",
 ) -> dict:
     """Agent 2: Run 3 security audit passes (optionally in parallel).
 
@@ -307,6 +336,9 @@ async def run_security_auditor(
     """
     logger.info("Agent 2: Security Auditor starting")
     cm = CodebaseMap(**codebase_map)
+
+    # Load pattern library for prompt context injection
+    pattern_context = _load_pattern_context(codebase_map, pattern_library_path)
 
     security_passes = [
         AuditPassType.AUTH_FLOW,
@@ -317,7 +349,10 @@ async def run_security_auditor(
     if parallel:
         results = await asyncio.gather(
             *[
-                _run_single_security_pass(p, repo_path, cm, model, ai_provider)
+                _run_single_security_pass(
+                    p, repo_path, cm, model, ai_provider,
+                    pattern_context=pattern_context,
+                )
                 for p in security_passes
             ],
             return_exceptions=True,
@@ -338,6 +373,7 @@ async def run_security_auditor(
         for p in security_passes:
             result = await _run_single_security_pass(
                 p, repo_path, cm, model, ai_provider,
+                pattern_context=pattern_context,
             )
             pass_results.append(result)
 

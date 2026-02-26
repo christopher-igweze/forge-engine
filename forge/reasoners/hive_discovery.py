@@ -28,6 +28,7 @@ async def run_hive_discovery(
     target_segments: int = 5,
     enable_wave2: bool = True,
     worker_types: list[str] | None = None,
+    pattern_library_path: str = "",
 ) -> dict:
     """Run the full Hive Discovery pipeline (Layers 0-2).
 
@@ -51,6 +52,7 @@ async def run_hive_discovery(
         target_segments=target_segments,
         enable_wave2=enable_wave2,
         worker_types=worker_types,
+        pattern_library_path=pattern_library_path,
     )
 
     result = await orchestrator.run()
