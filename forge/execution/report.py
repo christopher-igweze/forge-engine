@@ -64,6 +64,21 @@ def generate_discovery_report(
         for f in findings
     )
 
+    # Actionability breakdown
+    action_groups: dict[str, list[dict]] = {
+        "must_fix": [], "should_fix": [], "consider": [], "informational": [],
+    }
+    findings_dicts = [f.model_dump(mode="json") for f in findings]
+    for fd in findings_dicts:
+        tier = fd.get("actionability", "") or "consider"
+        if tier in action_groups:
+            action_groups[tier].append(fd)
+        else:
+            action_groups["consider"].append(fd)
+
+    must_should = len(action_groups["must_fix"]) + len(action_groups["should_fix"])
+    signal_ratio = round(must_should / len(findings), 2) if findings else 0.0
+
     report_data = {
         "run_id": run_id,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -76,7 +91,17 @@ def generate_discovery_report(
         "total_findings": len(findings),
         "severity_breakdown": dict(sev_counts),
         "category_breakdown": dict(cat_counts),
-        "findings": [f.model_dump(mode="json") for f in findings],
+        "findings_by_actionability": {
+            k: v for k, v in action_groups.items()
+        },
+        "actionability_summary": {
+            "must_fix_count": len(action_groups["must_fix"]),
+            "should_fix_count": len(action_groups["should_fix"]),
+            "consider_count": len(action_groups["consider"]),
+            "informational_count": len(action_groups["informational"]),
+            "signal_to_noise_ratio": signal_ratio,
+        },
+        "findings": findings_dicts,
         "remediation_plan": plan.model_dump(mode="json") if plan else None,
         "codebase_map": codebase_map.model_dump(mode="json") if codebase_map else None,
         "dependency_graph": _build_graph_report_data(graph_data) if graph_data else None,
@@ -214,21 +239,29 @@ def _render_discovery_html(
     # ── Analysis Methodology section ──────────────────────────────
     methodology_html = _render_methodology_section(findings)
 
-    # Findings table rows
-    findings_rows = ""
-    for f in sorted_findings:
+    # Build findings rows grouped by actionability
+    _ACTION_ORDER = ["must_fix", "should_fix", "consider", "informational"]
+    _ACTION_LABELS = {
+        "must_fix": "Must Fix",
+        "should_fix": "Should Fix",
+        "consider": "Consider",
+        "informational": "Informational",
+    }
+
+    def _finding_row(f: AuditFinding) -> str:
         sev = f.severity.value if hasattr(f.severity, "value") else str(f.severity)
-        cat = f.category.value if hasattr(f.category, "value") else str(f.category)
+        act = f.actionability or "consider"
         loc = ""
         if f.locations:
             first = f.locations[0]
             loc = _esc(first.file_path)
             if first.line_start:
                 loc += f":{first.line_start}"
-        tier = ""
-        if f.tier is not None:
-            tier_val = f.tier.value if hasattr(f.tier, "value") else str(f.tier)
-            tier = f'<span class="tier">T{tier_val}</span>'
+
+        # Data flow trace (from new data_flow field)
+        data_flow_html = ""
+        if f.data_flow:
+            data_flow_html = f'<div class="desc"><em>Flow:</em> {_esc(f.data_flow)}</div>'
 
         # Cross-reference: which data flows touch this finding's file?
         impact_html = ""
@@ -245,18 +278,46 @@ def _render_discovery_html(
                 )
                 impact_html = f'<div class="impact">Ripple: {flow_tags}</div>'
 
-        findings_rows += f"""
+        return f"""
         <tr>
             <td><span class="severity {sev}">{sev}</span></td>
-            <td>{_esc(cat)}</td>
+            <td><span class="actionability {act}">{_ACTION_LABELS.get(act, act)}</span></td>
             <td>
                 <strong>{_esc(f.title)}</strong>
                 <div class="desc">{_esc(f.description)}</div>
+                {data_flow_html}
                 {impact_html}
             </td>
             <td class="loc">{loc}</td>
-            <td>{tier}</td>
         </tr>"""
+
+    # Group findings by actionability tier
+    grouped: dict[str, list[AuditFinding]] = {k: [] for k in _ACTION_ORDER}
+    for f in sorted_findings:
+        act = f.actionability or "consider"
+        if act in grouped:
+            grouped[act].append(f)
+        else:
+            grouped["consider"].append(f)
+
+    findings_html = ""
+    for action_tier in _ACTION_ORDER:
+        group = grouped[action_tier]
+        if not group:
+            continue
+        label = _ACTION_LABELS[action_tier]
+        findings_rows = "".join(_finding_row(f) for f in group)
+        findings_html += f"""
+    <div class="action-group">
+        <div class="action-group-header">
+            <span class="actionability {action_tier}">{label}</span>
+            <span class="action-count">{len(group)} finding{'s' if len(group) != 1 else ''}</span>
+        </div>
+        <table>
+            <thead><tr><th>Severity</th><th>Action</th><th>Finding</th><th>Location</th></tr></thead>
+            <tbody>{findings_rows}</tbody>
+        </table>
+    </div>"""
 
     # Remediation plan section
     plan_html = ""
@@ -318,6 +379,14 @@ def _render_discovery_html(
         .severity.low {{ background: #f0fdf4; color: #166534; }}
         .severity.info {{ background: #f0f9ff; color: #075985; }}
         .tier {{ display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: 600; background: #f1f5f9; color: #475569; }}
+        .actionability {{ display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; }}
+        .actionability.must_fix {{ background: #fef2f2; color: #991b1b; }}
+        .actionability.should_fix {{ background: #fff7ed; color: #9a3412; }}
+        .actionability.consider {{ background: #fefce8; color: #854d0e; }}
+        .actionability.informational {{ background: #f0f9ff; color: #075985; }}
+        .action-group {{ margin-bottom: 1.5rem; }}
+        .action-group-header {{ display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }}
+        .action-count {{ font-size: 0.85rem; color: #64748b; }}
         .plan-summary {{ color: #475569; margin-bottom: 0.75rem; line-height: 1.5; }}
         .arch-summary {{ color: #475569; line-height: 1.6; margin-bottom: 1rem; white-space: pre-line; }}
         .arch-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem; }}
@@ -385,10 +454,7 @@ def _render_discovery_html(
     {methodology_html}
 
     <h2>All Findings</h2>
-    <table>
-        <thead><tr><th>Severity</th><th>Category</th><th>Finding</th><th>Location</th><th>Tier</th></tr></thead>
-        <tbody>{findings_rows}</tbody>
-    </table>
+    {findings_html}
 
     {plan_html}
 
