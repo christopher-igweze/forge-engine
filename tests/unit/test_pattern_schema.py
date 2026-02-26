@@ -1,7 +1,8 @@
-"""Tests for vulnerability pattern schema models."""
+"""Tests for vulnerability pattern schema models and AuditFinding pattern fields."""
 
 import pytest
 
+from forge.schemas import AuditFinding, FindingCategory, FindingSeverity
 from forge.patterns.schema import (
     DeterministicSignal,
     LLMGuidance,
@@ -194,3 +195,30 @@ class TestVulnerabilityPattern:
         )
         assert p.source == PatternSource.SCAN_DERIVED
         assert p.source_url == "https://example.com/vuln"
+
+
+class TestAuditFindingPatternFields:
+    def test_pattern_fields_default_empty(self):
+        f = AuditFinding(
+            title="Test",
+            description="Desc",
+            category=FindingCategory.SECURITY,
+            severity=FindingSeverity.HIGH,
+        )
+        assert f.pattern_id == ""
+        assert f.pattern_slug == ""
+
+    def test_pattern_fields_round_trip(self):
+        f = AuditFinding(
+            title="Test",
+            description="Desc",
+            category=FindingCategory.SECURITY,
+            severity=FindingSeverity.HIGH,
+            pattern_id="VP-001",
+            pattern_slug="client-writable-server-authority",
+        )
+        assert f.pattern_id == "VP-001"
+        assert f.pattern_slug == "client-writable-server-authority"
+        d = f.model_dump()
+        assert d["pattern_id"] == "VP-001"
+        assert d["pattern_slug"] == "client-writable-server-authority"

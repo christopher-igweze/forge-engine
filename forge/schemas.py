@@ -207,6 +207,8 @@ class AuditFinding(BaseModel):
     agent: str = ""  # which agent produced this finding
     tier: RemediationTier | None = None  # assigned by Triage Classifier
     dedup_key: str = ""  # used by Fix Strategist for deduplication
+    pattern_id: str = ""  # links to VulnerabilityPattern.id (e.g. "VP-001")
+    pattern_slug: str = ""  # links to VulnerabilityPattern.slug
 
 
 # ── Agent 2: Security Auditor ─────────────────────────────────────────
