@@ -318,10 +318,11 @@ async def run_standalone(
 
     # Generate discovery report (findings + remediation plan) after telemetry
     # flush so cost_usd is populated. Runs for all modes that produce findings.
+    discovery_report_data: dict | None = None
     if state.all_findings and state.artifacts_dir:
         try:
             from forge.execution.report import generate_discovery_report
-            generate_discovery_report(
+            _paths, discovery_report_data = generate_discovery_report(
                 findings=state.all_findings,
                 plan=state.remediation_plan,
                 artifacts_dir=state.artifacts_dir,
@@ -366,6 +367,7 @@ async def run_standalone(
         cost_usd=state.estimated_cost_usd,
         duration_seconds=elapsed,
         readiness_report=state.readiness_report,
+        discovery_report=discovery_report_data,
     )
 
     logger.info(

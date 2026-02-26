@@ -268,6 +268,23 @@ async def remediate(
         __import__("datetime").timezone.utc
     )
 
+    # Generate discovery report and attach to result for storage in Supabase
+    discovery_report_data: dict | None = None
+    if state.all_findings and state.artifacts_dir:
+        try:
+            from forge.execution.report import generate_discovery_report
+            _paths, discovery_report_data = generate_discovery_report(
+                findings=state.all_findings,
+                plan=state.remediation_plan,
+                artifacts_dir=state.artifacts_dir,
+                run_id=state.forge_run_id,
+                duration_seconds=elapsed,
+                cost_usd=state.estimated_cost_usd,
+                codebase_map=state.codebase_map,
+            )
+        except Exception as e:
+            logger.warning("Discovery report generation failed: %s", e)
+
     result = ForgeResult(
         forge_run_id=state.forge_run_id,
         success=state.success,
@@ -280,6 +297,7 @@ async def remediate(
         cost_usd=state.estimated_cost_usd,
         duration_seconds=elapsed,
         readiness_report=state.readiness_report,
+        discovery_report=discovery_report_data,
     )
 
     logger.info(

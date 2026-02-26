@@ -35,11 +35,13 @@ def generate_discovery_report(
     cost_usd: float = 0.0,
     codebase_map: CodebaseMap | None = None,
     graph_data: dict | None = None,
-) -> dict[str, str]:
+) -> tuple[dict[str, str], dict]:
     """Generate a discovery-phase report with all findings and remediation plan.
 
     Called after discovery+triage (Agents 1-7) even in dry_run mode.
-    Returns a dict of {format: file_path} for generated reports.
+    Returns a tuple of (paths dict, report_data dict).
+    The paths dict maps {format: file_path} for generated reports.
+    The report_data dict contains the full structured discovery report.
 
     Args:
         graph_data: Enriched CodeGraph dict from hive discovery. If None,
@@ -128,7 +130,7 @@ def generate_discovery_report(
         "Discovery report generated: %d findings → %s",
         len(findings), ", ".join(paths.keys()),
     )
-    return paths
+    return paths, report_data
 
 
 def generate_reports(

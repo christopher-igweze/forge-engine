@@ -518,6 +518,7 @@ class ForgeResult(BaseModel):
     summary: str
     pr_url: str = ""
     readiness_report: ProductionReadinessReport | None = None
+    discovery_report: dict | None = None
     total_findings: int = 0
     findings_fixed: int = 0
     findings_deferred: int = 0

@@ -456,7 +456,7 @@ class TestDiscoveryReportWithGraph:
         graph = _make_graph_data()
         findings = _make_findings(graph)
 
-        paths = generate_discovery_report(
+        paths, _ = generate_discovery_report(
             findings=findings,
             plan=None,
             artifacts_dir=str(tmp_path),
@@ -475,7 +475,7 @@ class TestDiscoveryReportWithGraph:
         graph = _make_graph_data(cross_segment_deps=True, with_findings=True)
         findings = _make_findings(graph)
 
-        paths = generate_discovery_report(
+        paths, _ = generate_discovery_report(
             findings=findings,
             plan=None,
             artifacts_dir=str(tmp_path),
@@ -501,7 +501,7 @@ class TestDiscoveryReportWithGraph:
             suggested_fix="Fix it",
         )]
 
-        paths = generate_discovery_report(
+        paths, _ = generate_discovery_report(
             findings=findings,
             plan=None,
             artifacts_dir=str(tmp_path),
@@ -527,7 +527,7 @@ class TestDiscoveryReportWithGraph:
 
         findings = _make_findings(graph)
 
-        paths = generate_discovery_report(
+        paths, _ = generate_discovery_report(
             findings=findings,
             plan=None,
             artifacts_dir=str(tmp_path),
@@ -615,7 +615,7 @@ class TestDiscoveryReportWithMethodology:
             locations=[],
             suggested_fix="",
         )]
-        paths = generate_discovery_report(
+        paths, _ = generate_discovery_report(
             findings=findings,
             plan=None,
             artifacts_dir=str(tmp_path),
@@ -636,7 +636,7 @@ class TestDiscoveryReportWithMethodology:
             locations=[],
             suggested_fix="",
         )]
-        paths = generate_discovery_report(
+        paths, _ = generate_discovery_report(
             findings=findings,
             plan=None,
             artifacts_dir=str(tmp_path),
