@@ -207,6 +207,10 @@ class AuditFinding(BaseModel):
     agent: str = ""  # which agent produced this finding
     tier: RemediationTier | None = None  # assigned by Triage Classifier
     dedup_key: str = ""  # used by Fix Strategist for deduplication
+    pattern_id: str = ""  # links to VulnerabilityPattern.id (e.g. "VP-001")
+    pattern_slug: str = ""  # links to VulnerabilityPattern.slug
+    data_flow: str = ""  # source -> transformation -> sink trace
+    actionability: str = ""  # must_fix | should_fix | consider | informational
 
 
 # ── Agent 2: Security Auditor ─────────────────────────────────────────
@@ -514,6 +518,7 @@ class ForgeResult(BaseModel):
     summary: str
     pr_url: str = ""
     readiness_report: ProductionReadinessReport | None = None
+    discovery_report: dict | None = None
     total_findings: int = 0
     findings_fixed: int = 0
     findings_deferred: int = 0

@@ -54,6 +54,8 @@ class HiveOrchestrator:
         target_segments: int = 5,
         enable_wave2: bool = True,
         worker_types: list[str] | None = None,
+        pattern_library_path: str = "",
+        project_context: dict | None = None,
     ):
         self.repo_path = repo_path
         self.repo_url = repo_url
@@ -64,6 +66,8 @@ class HiveOrchestrator:
         self.target_segments = target_segments
         self.enable_wave2 = enable_wave2
         self.worker_types = worker_types or ["security", "quality", "architecture"]
+        self.pattern_library_path = pattern_library_path
+        self.project_context = project_context or {}
 
         self._graph: CodeGraph | None = None
         self._total_invocations: int = 0
@@ -222,17 +226,58 @@ class HiveOrchestrator:
             "architecture": ArchitectureWorker,
         }
 
+        # Load pattern context once for all SecurityWorkers
+        pattern_ctx = self._build_pattern_context()
+
+        # Build project context string once for all workers
+        project_ctx = self._build_project_context()
+
         for segment in self._graph.segments:
             for worker_type in self.worker_types:
                 cls = worker_classes.get(worker_type)
                 if cls:
-                    workers.append(cls(
-                        segment_id=segment.id,
-                        model=self.worker_model,
-                        ai_provider=self.ai_provider,
-                    ))
+                    kwargs: dict = {
+                        "segment_id": segment.id,
+                        "model": self.worker_model,
+                        "ai_provider": self.ai_provider,
+                    }
+                    if worker_type == "security" and pattern_ctx:
+                        kwargs["pattern_context"] = pattern_ctx
+                    if project_ctx:
+                        kwargs["project_context"] = project_ctx
+                    workers.append(cls(**kwargs))
 
         return workers
+
+    def _build_pattern_context(self) -> str:
+        """Load pattern library and build LLM context string."""
+        try:
+            from forge.patterns.context import build_pattern_context_for_prompt
+            from forge.patterns.loader import PatternLibrary
+
+            if self.pattern_library_path:
+                library = PatternLibrary.load_from_directory(self.pattern_library_path)
+            else:
+                library = PatternLibrary.load_default()
+
+            if not library:
+                return ""
+
+            return build_pattern_context_for_prompt(library, category="security")
+        except Exception as exc:
+            logger.warning("Failed to load pattern library: %s", exc)
+            return ""
+
+    def _build_project_context(self) -> str:
+        """Build project context string from user-provided metadata."""
+        if not self.project_context:
+            return ""
+        try:
+            from forge.prompts.project_context import build_project_context_string
+            return build_project_context_string(self.project_context)
+        except Exception as exc:
+            logger.warning("Failed to build project context: %s", exc)
+            return ""
 
     def _save_artifact(self, rel_path: str, data: Any) -> None:
         """Save a JSON artifact."""

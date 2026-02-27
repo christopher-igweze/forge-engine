@@ -101,3 +101,11 @@ class TestForgeConfig:
         assert cfg.enable_parallel_audit is True
         assert cfg.enable_learning is True
         assert cfg.dry_run is False
+
+    def test_pattern_library_path_default(self):
+        cfg = ForgeConfig()
+        assert cfg.pattern_library_path == ""
+
+    def test_pattern_library_path_custom(self):
+        cfg = ForgeConfig(pattern_library_path="/custom/patterns")
+        assert cfg.pattern_library_path == "/custom/patterns"

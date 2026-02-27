@@ -542,6 +542,175 @@ class TestTriageSkipInSwarmMode:
 # ── Test 5: StandaloneDispatcher Registration ────────────────────────────
 
 
+class TestProjectContextThreading:
+    """Project context is threaded through both swarm and classic discovery modes."""
+
+    @pytest.mark.asyncio
+    async def test_swarm_mode_passes_project_context_to_hive(self):
+        """Swarm mode forwards cfg.project_context to run_hive_discovery."""
+        ctx = {"project_stage": "mvp", "team_size": 1}
+        cfg = ForgeConfig(discovery_mode="swarm", project_context=ctx)
+        resolved = cfg.resolved_models()
+
+        state = ForgeExecutionState(
+            repo_path="/tmp/test-repo",
+            artifacts_dir="/tmp/test-artifacts",
+        )
+
+        mock_app = MagicMock()
+        captured_kwargs = {}
+
+        async def _capture_call(target, **kwargs):
+            captured_kwargs.update(kwargs)
+            return {
+                "codebase_map": {"files": [], "loc_total": 0, "file_count": 0, "primary_language": "", "languages": []},
+                "findings": [],
+                "triage_result": {"decisions": [], "tier_0_count": 0, "tier_1_count": 0, "tier_2_count": 0, "tier_3_count": 0},
+                "remediation_plan": {"items": [], "execution_levels": [], "total_items": 0},
+                "graph": {},
+                "stats": {"total_invocations": 1},
+            }
+
+        mock_app.call = AsyncMock(side_effect=_capture_call)
+
+        from forge.app import _run_discovery
+        await _run_discovery(mock_app, state, cfg, resolved)
+
+        assert "project_context" in captured_kwargs
+        assert captured_kwargs["project_context"] == ctx
+
+    @pytest.mark.asyncio
+    async def test_classic_mode_passes_project_context_to_security_auditor(self):
+        """Classic mode builds project context string and passes to security auditor."""
+        ctx = {"project_stage": "growth", "team_size": 5, "vision_summary": "E-commerce"}
+        cfg = ForgeConfig(discovery_mode="classic", project_context=ctx)
+        resolved = cfg.resolved_models()
+
+        state = ForgeExecutionState(
+            repo_path="/tmp/test-repo",
+            artifacts_dir="/tmp/test-artifacts",
+        )
+
+        mock_app = MagicMock()
+        security_kwargs = {}
+
+        async def _track_call(target, **kwargs):
+            if "security_auditor" in target:
+                security_kwargs.update(kwargs)
+            if "codebase_analyst" in target:
+                return {
+                    "files": [{"path": "src/app.ts", "language": "typescript", "loc": 100}],
+                    "loc_total": 100,
+                    "file_count": 1,
+                    "primary_language": "typescript",
+                    "languages": ["typescript"],
+                }
+            return {"findings": []}
+
+        mock_app.call = AsyncMock(side_effect=_track_call)
+
+        from forge.app import _run_discovery
+        await _run_discovery(mock_app, state, cfg, resolved)
+
+        assert "project_context" in security_kwargs
+        # Should be a built string, not a raw dict
+        assert isinstance(security_kwargs["project_context"], str)
+        assert "<project_context>" in security_kwargs["project_context"]
+        assert "Growth Stage" in security_kwargs["project_context"]
+
+    @pytest.mark.asyncio
+    async def test_actionability_applied_after_classic_discovery(self):
+        """Actionability classification runs after classic discovery merges findings."""
+        from forge.schemas import AuditFinding, FindingCategory, FindingSeverity
+
+        cfg = ForgeConfig(
+            discovery_mode="classic",
+            project_context={"project_stage": "mvp", "team_size": 1},
+        )
+        resolved = cfg.resolved_models()
+
+        state = ForgeExecutionState(
+            repo_path="/tmp/test-repo",
+            artifacts_dir="/tmp/test-artifacts",
+        )
+
+        mock_app = MagicMock()
+
+        async def _track_call(target, **kwargs):
+            if "codebase_analyst" in target:
+                return {
+                    "files": [], "loc_total": 0, "file_count": 0,
+                    "primary_language": "", "languages": [],
+                }
+            if "security_auditor" in target:
+                return {"findings": [
+                    {
+                        "id": "F-001",
+                        "title": "SQL injection",
+                        "description": "Unsanitized input in query",
+                        "category": "security",
+                        "severity": "critical",
+                        "confidence": 0.95,
+                        "agent": "security_auditor",
+                    }
+                ]}
+            return {"findings": []}
+
+        mock_app.call = AsyncMock(side_effect=_track_call)
+
+        from forge.app import _run_discovery
+        await _run_discovery(mock_app, state, cfg, resolved)
+
+        # Findings should have actionability set
+        assert len(state.all_findings) >= 1
+        assert state.all_findings[0].actionability == "must_fix"
+
+    @pytest.mark.asyncio
+    async def test_actionability_applied_after_swarm_discovery(self):
+        """Actionability classification runs after swarm discovery."""
+        cfg = ForgeConfig(
+            discovery_mode="swarm",
+            project_context={"project_stage": "enterprise", "team_size": 20},
+        )
+        resolved = cfg.resolved_models()
+
+        state = ForgeExecutionState(
+            repo_path="/tmp/test-repo",
+            artifacts_dir="/tmp/test-artifacts",
+        )
+
+        mock_app = MagicMock()
+
+        async def _track_call(target, **kwargs):
+            return {
+                "codebase_map": {"files": [], "loc_total": 0, "file_count": 0, "primary_language": "", "languages": []},
+                "findings": [
+                    {
+                        "id": "F-swarm-001",
+                        "title": "Missing auth check",
+                        "description": "No authentication on admin endpoint",
+                        "category": "security",
+                        "severity": "high",
+                        "confidence": 0.9,
+                        "agent": "swarm_worker",
+                    }
+                ],
+                "triage_result": {"decisions": [], "tier_0_count": 0, "tier_1_count": 0, "tier_2_count": 0, "tier_3_count": 0},
+                "remediation_plan": {"items": [], "execution_levels": [], "total_items": 0},
+                "graph": {},
+                "stats": {"total_invocations": 1},
+            }
+
+        mock_app.call = AsyncMock(side_effect=_track_call)
+
+        from forge.app import _run_discovery
+        await _run_discovery(mock_app, state, cfg, resolved)
+
+        assert len(state.all_findings) >= 1
+        # Enterprise stage + high severity + high confidence → must_fix
+        assert state.all_findings[0].actionability == "must_fix"
+
+
 class TestStandaloneDispatcherRegistry:
     """run_hive_discovery is registered in the StandaloneDispatcher registry."""
 

@@ -4,8 +4,35 @@ In platform mode (agentfield installed): starts the AgentField node.
 In standalone mode: prints a message directing to the CLI.
 """
 
+import json
 import os
 import sys
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+
+class _HealthHandler(BaseHTTPRequestHandler):
+    """Minimal health check handler."""
+
+    def do_GET(self):
+        if self.path == "/health":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "ok"}).encode())
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):
+        pass  # Suppress request logging
+
+
+def _start_health_server(port: int) -> None:
+    """Start a lightweight health check server in a daemon thread."""
+    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
 
 
 def main() -> None:
@@ -24,6 +51,10 @@ def main() -> None:
 
     port = int(os.getenv("FORGE_PORT", "8004"))
     host = os.getenv("FORGE_HOST", "0.0.0.0")
+    health_port = int(os.getenv("FORGE_HEALTH_PORT", "8005"))
+
+    _start_health_server(health_port)
+
     app.run(port=port, host=host)
 
 

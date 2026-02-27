@@ -268,6 +268,23 @@ async def remediate(
         __import__("datetime").timezone.utc
     )
 
+    # Generate discovery report and attach to result for storage in Supabase
+    discovery_report_data: dict | None = None
+    if state.all_findings and state.artifacts_dir:
+        try:
+            from forge.execution.report import generate_discovery_report
+            _paths, discovery_report_data = generate_discovery_report(
+                findings=state.all_findings,
+                plan=state.remediation_plan,
+                artifacts_dir=state.artifacts_dir,
+                run_id=state.forge_run_id,
+                duration_seconds=elapsed,
+                cost_usd=state.estimated_cost_usd,
+                codebase_map=state.codebase_map,
+            )
+        except Exception as e:
+            logger.warning("Discovery report generation failed: %s", e)
+
     result = ForgeResult(
         forge_run_id=state.forge_run_id,
         success=state.success,
@@ -280,6 +297,7 @@ async def remediate(
         cost_usd=state.estimated_cost_usd,
         duration_seconds=elapsed,
         readiness_report=state.readiness_report,
+        discovery_report=discovery_report_data,
     )
 
     logger.info(
@@ -456,6 +474,15 @@ async def _run_discovery(
     logger.info("Discovery: Running Agents 2-4 in parallel")
 
     coros = []
+    # Build project context string for prompt injection (zero LLM cost)
+    project_context_str = ""
+    if cfg.project_context:
+        try:
+            from forge.prompts.project_context import build_project_context_string
+            project_context_str = build_project_context_string(cfg.project_context)
+        except Exception as e:
+            logger.warning("Failed to build project context: %s", e)
+
     # Agent 2: Security Auditor
     coros.append(app.call(
         f"{NODE_ID}.run_security_auditor",
@@ -466,6 +493,8 @@ async def _run_discovery(
         model=resolved_models.get("security_auditor_model", "anthropic/claude-haiku-4.5"),
         ai_provider=cfg.provider_for_role("security_auditor"),
         parallel=cfg.enable_parallel_audit,
+        pattern_library_path=cfg.pattern_library_path,
+        project_context=project_context_str,
     ))
 
     # Agent 3: Quality Auditor
@@ -521,6 +550,14 @@ async def _run_discovery(
         state.architecture_findings
     )
 
+    # Apply actionability classification (deterministic post-processing)
+    if state.all_findings:
+        try:
+            from forge.execution.actionability import apply_actionability
+            apply_actionability(state.all_findings, cfg.project_context)
+        except Exception as e:
+            logger.warning("Actionability classification failed (non-fatal): %s", e)
+
     logger.info(
         "Discovery complete: %d security, %d quality, %d architecture findings",
         len(state.security_findings),
@@ -555,6 +592,8 @@ async def _run_swarm_discovery(
         target_segments=cfg.swarm_target_segments,
         enable_wave2=cfg.swarm_enable_wave2,
         worker_types=cfg.swarm_worker_types,
+        pattern_library_path=cfg.pattern_library_path,
+        project_context=cfg.project_context,
     )
 
     if not isinstance(hive_result, dict):
@@ -594,6 +633,14 @@ async def _run_swarm_discovery(
     state.quality_findings = [f for f in all_findings if f.category.value == "quality"]
     state.architecture_findings = [f for f in all_findings if f.category.value == "architecture"]
     state.all_findings = all_findings
+
+    # Apply actionability classification (deterministic post-processing)
+    if state.all_findings:
+        try:
+            from forge.execution.actionability import apply_actionability
+            apply_actionability(state.all_findings, cfg.project_context)
+        except Exception as e:
+            logger.warning("Actionability classification failed (non-fatal): %s", e)
 
     # Parse triage result
     triage_data = hive_result.get("triage_result", {})

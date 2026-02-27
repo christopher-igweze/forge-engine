@@ -116,6 +116,12 @@ class ForgeConfig(BaseModel):
     swarm_enable_wave2: bool = True  # Enable Wave 2 (MoA re-analysis)
     swarm_worker_types: list[str] = ["security", "quality", "architecture"]
 
+    # ── Vulnerability Pattern Library ────────────────────────────
+    pattern_library_path: str = ""  # Custom path; empty = use built-in library
+
+    # ── Project Context ───────────────────────────────────────────
+    project_context: dict = {}  # User-provided project context for scan personalization
+
     def resolved_models(self) -> dict[str, str]:
         """Resolve model fields using the standard cascade.
 
