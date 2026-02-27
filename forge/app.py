@@ -75,9 +75,13 @@ def _resolve_repo_path(repo_url: str, repo_path: str) -> str:
         name = match.group(1) if match else "repo"
         workspace = os.path.join(WORKSPACES_DIR, name)
 
-        if Path(workspace).is_dir():
+        if Path(workspace).is_dir() and any(Path(workspace).iterdir()):
             logger.info("Reusing existing workspace: %s", workspace)
             return workspace
+        elif Path(workspace).is_dir():
+            import shutil
+            shutil.rmtree(workspace)
+            logger.info("Removed stale empty workspace: %s", workspace)
 
         # Clone
         logger.info("Cloning %s → %s", repo_url, workspace)
