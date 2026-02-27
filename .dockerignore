@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.git/
+tests/
+benchmarks/
+.pytest_cache/
+.forge-benchmarks/
+*.md
+!pyproject.toml
