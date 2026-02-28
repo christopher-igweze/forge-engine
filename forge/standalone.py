@@ -141,10 +141,21 @@ def _resolve_repo_path(repo_url: str, repo_path: str) -> str:
 
         logger.info("Cloning %s → %s", repo_url, workspace)
         os.makedirs(workspace, exist_ok=True)
-        subprocess.run(
-            ["git", "clone", "--depth=1", repo_url, workspace],
-            check=True, capture_output=True, text=True,
-        )
+        try:
+            subprocess.run(
+                ["git", "clone", "--depth=1", repo_url, workspace],
+                check=True, capture_output=True, text=True,
+            )
+        except FileNotFoundError:
+            raise ValueError(
+                "git is not installed or not found in PATH. "
+                "Install git and retry, or provide a local --path instead."
+            )
+        except subprocess.CalledProcessError as e:
+            raise ValueError(
+                f"Failed to clone {repo_url}: "
+                f"{e.stderr.strip() or e.stdout.strip() or str(e)}"
+            )
         return workspace
 
     raise ValueError("Either repo_url or repo_path must be provided")
