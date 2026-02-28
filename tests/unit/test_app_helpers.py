@@ -5,20 +5,20 @@ from unittest.mock import patch
 
 import pytest
 
-from forge.app import _resolve_repo_path
+from forge.app_helpers import _resolve_repo_path
 
 
 class TestAppResolveRepoPath:
     """Tests for app.py's _resolve_repo_path() helper."""
 
     def test_git_not_found_raises_valueerror(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("forge.app.WORKSPACES_DIR", str(tmp_path / "ws"))
+        monkeypatch.setattr("forge.app_helpers.WORKSPACES_DIR", str(tmp_path / "ws"))
         with patch("subprocess.run", side_effect=FileNotFoundError("git")):
             with pytest.raises(ValueError, match="git is not installed"):
                 _resolve_repo_path("https://github.com/user/repo.git", "")
 
     def test_clone_failure_raises_valueerror(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("forge.app.WORKSPACES_DIR", str(tmp_path / "ws"))
+        monkeypatch.setattr("forge.app_helpers.WORKSPACES_DIR", str(tmp_path / "ws"))
         err = subprocess.CalledProcessError(
             128, "git", stderr="fatal: repository not found"
         )
