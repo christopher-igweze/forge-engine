@@ -34,7 +34,16 @@ SKIP_EXTENSIONS = {
 SKIP_DIRS = {
     "node_modules", ".git", "__pycache__", ".next", ".nuxt",
     "dist", "build", ".cache", "coverage", ".venv", "venv",
-    ".artifacts", ".local-test",
+    ".artifacts", ".local-test", ".forge-worktrees", ".tox",
+    "target", "vendor", ".mypy_cache", ".pytest_cache",
+    "out", "bin", "obj",
+}
+# Lock files that use non-.lock extensions (e.g. package-lock.json)
+_LOCK_FILE_NAMES = {
+    "package-lock.json", "pnpm-lock.yaml", "pnpm-lock.yml",
+    "yarn.lock", "composer.lock", "gemfile.lock", "cargo.lock",
+    "poetry.lock", "pipfile.lock", "bun.lockb",
+    "npm-shrinkwrap.json",
 }
 
 
@@ -107,7 +116,13 @@ def _estimate_tokens(text: str) -> int:
 def _should_skip_file(path: str) -> bool:
     """Check if a file should be excluded from context."""
     p = Path(path)
+    name_lower = p.name.lower()
     if p.suffix.lower() in SKIP_EXTENSIONS:
+        return True
+    # Compound extensions like .min.js, .min.css
+    if name_lower.endswith((".min.js", ".min.css")):
+        return True
+    if name_lower in _LOCK_FILE_NAMES:
         return True
     if any(skip in p.parts for skip in SKIP_DIRS):
         return True
