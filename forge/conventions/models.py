@@ -21,7 +21,7 @@ class LintConventions(BaseModel):
     config_file: str = ""
 
 
-class TestConventions(BaseModel):
+class QAConventions(BaseModel):
     """Testing conventions extracted from config files."""
 
     framework: str = ""
@@ -49,7 +49,7 @@ class ProjectConventions(BaseModel):
     """
 
     lint: LintConventions = Field(default_factory=LintConventions)
-    test: TestConventions = Field(default_factory=TestConventions)
+    test: QAConventions = Field(default_factory=QAConventions)
     typescript: TypeScriptConventions = Field(default_factory=TypeScriptConventions)
 
     detected_patterns: list[str] = Field(default_factory=list)

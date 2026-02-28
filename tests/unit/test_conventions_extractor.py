@@ -16,7 +16,7 @@ from forge.conventions.formatter import build_conventions_context_string
 from forge.conventions.models import (
     LintConventions,
     ProjectConventions,
-    TestConventions,
+    QAConventions,
     TypeScriptConventions,
 )
 
@@ -168,7 +168,7 @@ class TestBuildConventionsContextString:
 
     def test_test_markers_in_output(self):
         conventions = ProjectConventions(
-            test=TestConventions(
+            test=QAConventions(
                 framework="pytest",
                 custom_markers=["slow", "integration"],
                 config_file="pyproject.toml[tool.pytest]",

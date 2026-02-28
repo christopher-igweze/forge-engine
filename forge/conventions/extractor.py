@@ -17,7 +17,7 @@ from pathlib import Path
 from forge.conventions.models import (
     LintConventions,
     ProjectConventions,
-    TestConventions,
+    QAConventions,
     TypeScriptConventions,
 )
 from forge.conventions.parsers import (
@@ -139,29 +139,29 @@ class ConventionsExtractor:
 
         return None
 
-    def _extract_test(self) -> TestConventions | None:
+    def _extract_test(self) -> QAConventions | None:
         """Extract testing conventions from pyproject/pytest.ini/jest."""
 
         # Python: pyproject.toml [tool.pytest]
         pyproject = parse_pyproject_toml(self.repo_path)
         test_data = pyproject.get("test")
         if test_data:
-            return TestConventions(**test_data)
+            return QAConventions(**test_data)
 
         # Python: pytest.ini / setup.cfg
         pytest_data = parse_pytest_ini(self.repo_path)
         if pytest_data:
-            return TestConventions(**pytest_data)
+            return QAConventions(**pytest_data)
 
         # JavaScript: Jest
         jest_data = parse_jest_config(self.repo_path)
         if jest_data:
-            return TestConventions(**jest_data)
+            return QAConventions(**jest_data)
 
         # Detect pytest by presence of conftest.py
         root = Path(self.repo_path)
         if (root / "conftest.py").exists() or (root / "tests" / "conftest.py").exists():
-            return TestConventions(
+            return QAConventions(
                 framework="pytest",
                 config_file="(detected from conftest.py)",
             )
