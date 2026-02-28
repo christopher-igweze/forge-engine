@@ -298,7 +298,7 @@ async def remediate(
                 codebase_map=state.codebase_map,
             )
         except Exception as e:
-            logger.warning("Discovery report generation failed: %s", e)
+            logger.warning("Discovery report generation failed: %s", e, exc_info=True)
 
     result = ForgeResult(
         forge_run_id=state.forge_run_id,

@@ -212,7 +212,7 @@ async def run_middle_loop(
                 app, node_id, item, finding, inner_state, cfg, resolved_models,
             )
         except Exception as e:
-            logger.warning("LLM escalation agent failed, falling back to heuristic: %s", e)
+            logger.warning("LLM escalation agent failed, falling back to heuristic: %s", e, exc_info=True)
 
     # Heuristic fallback
     return _heuristic_escalation(item, finding)

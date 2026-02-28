@@ -343,7 +343,7 @@ async def run_standalone(
                 codebase_map=state.codebase_map,
             )
         except Exception as e:
-            logger.warning("Discovery report generation failed: %s", e)
+            logger.warning("Discovery report generation failed: %s", e, exc_info=True)
 
     # Run pattern extraction pipeline (learning loop)
     if state.all_findings and state.artifacts_dir:
@@ -360,7 +360,7 @@ async def run_standalone(
             if prevalence:
                 logger.info("Pattern prevalence: %s", prevalence)
         except Exception as e:
-            logger.warning("Pattern extraction failed (non-fatal): %s", e)
+            logger.warning("Pattern extraction failed (non-fatal): %s", e, exc_info=True)
 
     state.finished_at = __import__("datetime").datetime.now(
         __import__("datetime").timezone.utc
