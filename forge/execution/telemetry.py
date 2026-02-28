@@ -43,6 +43,10 @@ _current_telemetry: contextvars.ContextVar[ForgeTelemetry | None] = (
     contextvars.ContextVar("_current_telemetry", default=None)
 )
 
+# Module-level fallback for when contextvars are lost across RPC boundaries
+# (e.g. AgentField dispatches agents via HTTP, creating new async contexts).
+_module_telemetry: ForgeTelemetry | None = None
+
 
 @dataclass
 class AgentInvocationLog:
@@ -106,12 +110,21 @@ class ForgeTelemetry:
 
     @staticmethod
     def current() -> ForgeTelemetry | None:
-        """Return the active telemetry instance, or None."""
-        return _current_telemetry.get()
+        """Return the active telemetry instance, or None.
+
+        Checks the contextvar first, then falls back to the module-level
+        instance (set when running under AgentField where contextvars
+        are lost across RPC boundaries).
+        """
+        return _current_telemetry.get() or _module_telemetry
 
     @contextmanager
     def activate(self) -> Generator[ForgeTelemetry, None, None]:
         """Activate this instance as the current telemetry context.
+
+        Sets both the contextvar (for same-process calls) and the
+        module-level fallback (for AgentField RPC calls where contextvars
+        are lost).
 
         Usage::
 
@@ -121,11 +134,15 @@ class ForgeTelemetry:
                 # auto-log invocations to this instance.
                 await run_standalone(...)
         """
+        global _module_telemetry
+        prev_module = _module_telemetry
+        _module_telemetry = self
         token = _current_telemetry.set(self)
         try:
             yield self
         finally:
             _current_telemetry.reset(token)
+            _module_telemetry = prev_module
 
     # ── Logging API ──────────────────────────────────────────────────
 
