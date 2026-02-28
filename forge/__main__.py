@@ -28,6 +28,28 @@ class _HealthHandler(BaseHTTPRequestHandler):
         pass  # Suppress request logging
 
 
+def _validate_port(env_var: str, default: int) -> int:
+    """Parse and validate a port number from an environment variable."""
+    raw = os.getenv(env_var, str(default))
+    try:
+        port = int(raw)
+    except ValueError:
+        print(
+            f"Warning: {env_var}={raw!r} is not a valid integer. "
+            f"Using default port {default}.",
+            file=sys.stderr,
+        )
+        return default
+    if not (1 <= port <= 65535):
+        print(
+            f"Warning: {env_var}={port} is outside valid range (1-65535). "
+            f"Using default port {default}.",
+            file=sys.stderr,
+        )
+        return default
+    return port
+
+
 def _start_health_server(port: int) -> None:
     """Start a lightweight health check server in a daemon thread."""
     server = HTTPServer(("0.0.0.0", port), _HealthHandler)
@@ -49,9 +71,9 @@ def main() -> None:
         )
         sys.exit(1)
 
-    port = int(os.getenv("FORGE_PORT", "8004"))
+    port = _validate_port("FORGE_PORT", 8004)
     host = os.getenv("FORGE_HOST", "0.0.0.0")
-    health_port = int(os.getenv("FORGE_HEALTH_PORT", "8005"))
+    health_port = _validate_port("FORGE_HEALTH_PORT", 8005)
 
     _start_health_server(health_port)
 
