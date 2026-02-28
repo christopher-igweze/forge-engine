@@ -321,7 +321,7 @@ def build_codebase_inventory(repo_path: str) -> list[dict]:
     root = Path(repo_path)
     inventory: list[dict] = []
 
-    # Only count actual source code toward LOC — exclude data/config/docs
+    # All recognised file types — included in inventory for agent context
     lang_map = {
         ".py": "python", ".js": "javascript", ".ts": "typescript",
         ".tsx": "typescript", ".jsx": "javascript", ".go": "go",
@@ -331,6 +331,16 @@ def build_codebase_inventory(repo_path: str) -> list[dict]:
         ".vue": "vue", ".svelte": "svelte",
         ".css": "css", ".scss": "scss", ".html": "html",
         ".sql": "sql", ".sh": "bash",
+        # Config/data files — visible for context but loc=0
+        ".json": "json", ".yaml": "yaml", ".yml": "yaml",
+        ".toml": "toml", ".md": "markdown",
+    }
+    # Only these extensions count toward LOC
+    _source_extensions = {
+        ".py", ".js", ".ts", ".tsx", ".jsx", ".go",
+        ".rs", ".java", ".rb", ".php", ".cs", ".cpp",
+        ".c", ".swift", ".kt", ".vue", ".svelte",
+        ".css", ".scss", ".html", ".sql", ".sh",
     }
 
     for dirpath, dirnames, filenames in os.walk(root):
@@ -346,9 +356,13 @@ def build_codebase_inventory(repo_path: str) -> list[dict]:
             if not language:
                 continue  # Skip unknown file types
 
-            try:
-                loc = sum(1 for _ in fpath.open(errors="replace"))
-            except OSError:
+            # Config/data files appear in inventory but don't inflate LOC
+            if suffix in _source_extensions:
+                try:
+                    loc = sum(1 for _ in fpath.open(errors="replace"))
+                except OSError:
+                    loc = 0
+            else:
                 loc = 0
 
             rel = str(fpath.relative_to(root))
