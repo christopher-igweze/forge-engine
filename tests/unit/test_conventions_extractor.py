@@ -9,8 +9,6 @@ from __future__ import annotations
 import json
 import textwrap
 
-import pytest
-
 from forge.conventions.extractor import ConventionsExtractor
 from forge.conventions.formatter import build_conventions_context_string
 from forge.conventions.models import (
@@ -117,6 +115,62 @@ class TestConventionsExtractor:
 
         assert conventions.test.framework == "pytest"
 
+    def test_test_dirs_auto_detected(self, tmp_path):
+        """Test directories are auto-detected even without config."""
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_foo.py").write_text("# test")
+        (tmp_path / "conftest.py").write_text("# conftest")
+
+        extractor = ConventionsExtractor(str(tmp_path))
+        conventions = extractor.extract()
+
+        assert "tests" in conventions.test.test_paths
+        assert "test_*.py" in conventions.test.test_file_patterns
+
+    def test_test_file_patterns_js_repo(self, tmp_path):
+        """JS/TS test file patterns detected from directory structure."""
+        (tmp_path / "__tests__").mkdir()
+        (tmp_path / "app.spec.ts").write_text("// test")
+
+        eslintrc = {"rules": {"no-console": "off"}}
+        (tmp_path / ".eslintrc.json").write_text(json.dumps(eslintrc))
+
+        extractor = ConventionsExtractor(str(tmp_path))
+        conventions = extractor.extract()
+
+        assert "__tests__" in conventions.test.test_paths
+        assert "*.spec.ts" in conventions.test.test_file_patterns
+
+    def test_test_dirs_only_no_framework(self, tmp_path):
+        """Test directories detected even without any test framework config."""
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "e2e").mkdir()
+        # Need at least one config file so conventions aren't empty
+        eslintrc = {"rules": {"no-console": "off"}}
+        (tmp_path / ".eslintrc.json").write_text(json.dumps(eslintrc))
+
+        extractor = ConventionsExtractor(str(tmp_path))
+        conventions = extractor.extract()
+
+        assert "tests" in conventions.test.test_paths
+        assert "e2e" in conventions.test.test_paths
+        assert conventions.test.config_file == "(auto-detected from directory structure)"
+
+    def test_pyproject_test_paths_enriched(self, tmp_path):
+        """test_paths from pyproject enriched with auto-detected file patterns."""
+        content = textwrap.dedent("""\
+        [tool.pytest.ini_options]
+        testpaths = ["tests"]
+        """)
+        (tmp_path / "pyproject.toml").write_text(content)
+        (tmp_path / "tests").mkdir()
+
+        extractor = ConventionsExtractor(str(tmp_path))
+        conventions = extractor.extract()
+
+        assert conventions.test.test_paths == ["tests"]
+        assert "test_*.py" in conventions.test.test_file_patterns
+
 
 class TestBuildConventionsContextString:
     """Formatter that builds prompt-injectable context strings."""
@@ -214,3 +268,55 @@ class TestBuildConventionsContextString:
         assert "RULE019" in result
         assert "RULE020" not in result
         assert "RULE029" not in result
+
+    def test_test_file_treatment_section_present(self):
+        """Test file treatment instructions appear when test paths exist."""
+        conventions = ProjectConventions(
+            test=QAConventions(
+                framework="pytest",
+                test_paths=["tests"],
+                test_file_patterns=["test_*.py", "*_test.py", "conftest.py"],
+                config_file="pyproject.toml[tool.pytest]",
+            ),
+            config_files_found=["pyproject.toml[tool.pytest]"],
+        )
+
+        result = build_conventions_context_string(conventions)
+
+        assert "Test File Treatment" in result
+        assert "INTENTIONALLY incorrect" in result
+        assert "Hardcoded credentials" in result
+        assert "test fixtures" in result
+        assert "Missing error handling" in result
+        assert "do NOT flag" in result
+
+    def test_test_file_patterns_in_output(self):
+        """Test file patterns are listed in the formatter output."""
+        conventions = ProjectConventions(
+            test=QAConventions(
+                framework="jest",
+                test_file_patterns=["*.spec.ts", "*.test.ts"],
+                config_file="jest.config.js",
+            ),
+            config_files_found=["jest.config.js"],
+        )
+
+        result = build_conventions_context_string(conventions)
+
+        assert "*.spec.ts" in result
+        assert "*.test.ts" in result
+
+    def test_no_test_treatment_without_paths(self):
+        """No test treatment section when no test paths or patterns detected."""
+        conventions = ProjectConventions(
+            test=QAConventions(
+                framework="pytest",
+                config_file="pyproject.toml[tool.pytest]",
+            ),
+            config_files_found=["pyproject.toml[tool.pytest]"],
+        )
+
+        result = build_conventions_context_string(conventions)
+
+        assert "Framework: pytest" in result
+        assert "Test File Treatment" not in result

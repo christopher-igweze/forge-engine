@@ -146,27 +146,94 @@ class ConventionsExtractor:
         pyproject = parse_pyproject_toml(self.repo_path)
         test_data = pyproject.get("test")
         if test_data:
-            return QAConventions(**test_data)
+            conv = QAConventions(**test_data)
+            self._enrich_test_paths(conv)
+            return conv
 
         # Python: pytest.ini / setup.cfg
         pytest_data = parse_pytest_ini(self.repo_path)
         if pytest_data:
-            return QAConventions(**pytest_data)
+            conv = QAConventions(**pytest_data)
+            self._enrich_test_paths(conv)
+            return conv
 
         # JavaScript: Jest
         jest_data = parse_jest_config(self.repo_path)
         if jest_data:
-            return QAConventions(**jest_data)
+            conv = QAConventions(**jest_data)
+            self._enrich_test_paths(conv)
+            return conv
 
         # Detect pytest by presence of conftest.py
         root = Path(self.repo_path)
         if (root / "conftest.py").exists() or (root / "tests" / "conftest.py").exists():
-            return QAConventions(
+            conv = QAConventions(
                 framework="pytest",
                 config_file="(detected from conftest.py)",
             )
+            self._enrich_test_paths(conv)
+            return conv
+
+        # No framework detected — still check for test directories
+        detected = self._detect_test_dirs()
+        if detected:
+            return QAConventions(
+                test_paths=detected["test_paths"],
+                test_file_patterns=detected["test_file_patterns"],
+                config_file="(auto-detected from directory structure)",
+            )
 
         return None
+
+    def _enrich_test_paths(self, conv: QAConventions) -> None:
+        """Add auto-detected test paths and file patterns if not already set."""
+        detected = self._detect_test_dirs()
+        if not conv.test_paths and detected.get("test_paths"):
+            conv.test_paths = detected["test_paths"]
+        if not conv.test_file_patterns:
+            conv.test_file_patterns = detected.get("test_file_patterns", [])
+
+    def _detect_test_dirs(self) -> dict:
+        """Scan for common test directory and file patterns.
+
+        Returns dict with test_paths and test_file_patterns, or empty dict.
+        """
+        root = Path(self.repo_path)
+        test_paths: list[str] = []
+        test_file_patterns: list[str] = []
+
+        # Common test directory names
+        for dirname in ("tests", "test", "__tests__", "e2e", "spec"):
+            if (root / dirname).is_dir():
+                test_paths.append(dirname)
+
+        # Check for test files at root level
+        has_py_tests = any(root.glob("test_*.py")) or any(root.glob("*_test.py"))
+        has_js_tests = (
+            any(root.glob("*.spec.ts"))
+            or any(root.glob("*.spec.tsx"))
+            or any(root.glob("*.test.ts"))
+            or any(root.glob("*.test.tsx"))
+            or any(root.glob("*.spec.js"))
+            or any(root.glob("*.test.js"))
+        )
+
+        # Build file pattern list for agent guidance
+        if test_paths or has_py_tests:
+            test_file_patterns.extend(["test_*.py", "*_test.py", "conftest.py"])
+        if test_paths or has_js_tests:
+            test_file_patterns.extend(
+                ["*.spec.ts", "*.spec.tsx", "*.test.ts", "*.test.tsx",
+                 "*.spec.js", "*.test.js"]
+            )
+
+        if not test_paths and not test_file_patterns:
+            return {}
+
+        return {
+            "test_paths": test_paths,
+            "test_file_patterns": sorted(set(test_file_patterns)),
+        }
 
     def _extract_typescript(self) -> TypeScriptConventions | None:
         """Extract TypeScript conventions from tsconfig.json."""

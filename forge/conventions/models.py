@@ -27,6 +27,7 @@ class QAConventions(BaseModel):
     framework: str = ""
     custom_markers: list[str] = Field(default_factory=list)
     test_paths: list[str] = Field(default_factory=list)
+    test_file_patterns: list[str] = Field(default_factory=list)
     coverage_threshold: float | None = None
     config_file: str = ""
 

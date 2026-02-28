@@ -60,9 +60,11 @@ def build_conventions_context_string(conventions: ProjectConventions) -> str:
 
     # ── Testing ──────────────────────────────────────────────────────
     test = conventions.test
-    if test.framework:
+    has_test_info = test.framework or test.test_paths or test.test_file_patterns
+    if has_test_info:
         parts.append("**Testing:**")
-        parts.append(f"- Framework: {test.framework}")
+        if test.framework:
+            parts.append(f"- Framework: {test.framework}")
         if test.custom_markers:
             markers_str = ", ".join(test.custom_markers[:15])
             parts.append(f"- Custom markers: {markers_str}")
@@ -72,8 +74,34 @@ def build_conventions_context_string(conventions: ProjectConventions) -> str:
             )
         if test.test_paths:
             parts.append(f"- Test paths: {', '.join(test.test_paths)}")
+        if test.test_file_patterns:
+            patterns_str = ", ".join(test.test_file_patterns)
+            parts.append(f"- Test file patterns: {patterns_str}")
         if test.coverage_threshold is not None:
             parts.append(f"- Coverage threshold: {test.coverage_threshold}%")
+        parts.append("")
+
+    # ── Test file treatment ───────────────────────────────────────
+    if test.test_paths or test.test_file_patterns:
+        parts.append("**Test File Treatment:**")
+        parts.append(
+            "Files in test directories and matching test file patterns contain "
+            "INTENTIONALLY incorrect, insecure, or incomplete code written to "
+            "exercise error paths and validate behavior. When analyzing test files, "
+            "do NOT flag:"
+        )
+        parts.append("- Hardcoded credentials, API keys, or tokens (these are test fixtures)")
+        parts.append("- Missing error handling or input validation (intentionally testing failure paths)")
+        parts.append("- Intentionally malformed data or injection strings (testing security boundaries)")
+        parts.append("- Mock/stub implementations with incomplete logic")
+        parts.append("- Disabled security checks or permissive configurations (test isolation)")
+        parts.append("- Code duplication across test cases (test readability > DRY)")
+        parts.append("- Broad exception catches or assertions on internal details (test pragmatism)")
+        parts.append(
+            "Only flag issues in test files if they represent a genuine risk that "
+            "could compromise the test infrastructure itself (e.g., real credentials "
+            "committed, tests that modify production data)."
+        )
         parts.append("")
 
     # ── TypeScript ───────────────────────────────────────────────────
