@@ -414,6 +414,7 @@ async def _run_single_quality_pass(
     codebase_map: CodebaseMap,
     model: str,
     ai_provider: str,
+    project_context: str = "",
 ) -> QualityAuditResult:
     """Execute a single quality audit pass."""
     logger.info("Agent 3: Quality pass %s starting", audit_pass.value)
@@ -437,6 +438,7 @@ async def _run_single_quality_pass(
         audit_pass=audit_pass,
         codebase_map_json=codebase_map_json,
         relevant_file_contents=file_contents,
+        project_context=project_context,
     )
 
     system_prompt = QUALITY_PASS_PROMPTS[audit_pass]
@@ -489,6 +491,7 @@ async def run_quality_auditor(
     model: str = "minimax/minimax-m2.5",
     ai_provider: str = "openrouter_direct",
     parallel: bool = True,
+    project_context: str = "",
 ) -> dict:
     """Agent 3: Run 3 quality audit passes (optionally in parallel).
 
@@ -505,7 +508,7 @@ async def run_quality_auditor(
 
     if parallel:
         results = await asyncio.gather(
-            *[_run_single_quality_pass(p, repo_path, cm, model, ai_provider) for p in quality_passes],
+            *[_run_single_quality_pass(p, repo_path, cm, model, ai_provider, project_context) for p in quality_passes],
             return_exceptions=True,
         )
         pass_results = []
@@ -522,7 +525,7 @@ async def run_quality_auditor(
     else:
         pass_results = []
         for p in quality_passes:
-            result = await _run_single_quality_pass(p, repo_path, cm, model, ai_provider)
+            result = await _run_single_quality_pass(p, repo_path, cm, model, ai_provider, project_context)
             pass_results.append(result)
 
     all_findings = []
@@ -552,6 +555,7 @@ async def run_architecture_reviewer(
     artifacts_dir: str = "",
     model: str = "anthropic/claude-haiku-4.5",
     ai_provider: str = "openrouter_direct",
+    project_context: str = "",
 ) -> dict:
     """Agent 4: Architecture review — structural coherence analysis."""
     logger.info("Agent 4: Architecture Reviewer starting")
@@ -568,6 +572,7 @@ async def run_architecture_reviewer(
     task = architecture_review_task_prompt(
         codebase_map_json=codebase_map_json,
         module_dependency_graph=module_graph,
+        project_context=project_context,
     )
 
     ai = AgentAI(AgentAIConfig(

@@ -82,6 +82,27 @@ async def _run_discovery(
         except Exception as e:
             logger.warning("Failed to build project context: %s", e)
 
+    # Auto-detect project conventions (deterministic, zero LLM)
+    try:
+        from forge.conventions import (
+            ConventionsExtractor,
+            build_conventions_context_string,
+        )
+        conventions = ConventionsExtractor(state.repo_path).extract()
+        conventions_str = build_conventions_context_string(conventions)
+        if conventions_str:
+            project_context_str = (
+                f"{project_context_str}\n\n{conventions_str}"
+                if project_context_str
+                else conventions_str
+            )
+            logger.info(
+                "Discovery: Auto-detected conventions from %d config files",
+                len(conventions.config_files_found),
+            )
+    except Exception as e:
+        logger.warning("Convention extraction failed (non-fatal): %s", e)
+
     # Agent 2: Security Auditor
     coros.append(app.call(
         f"{NODE_ID}.run_security_auditor",
@@ -105,6 +126,7 @@ async def _run_discovery(
         artifacts_dir=state.artifacts_dir,
         model=resolved_models.get("quality_auditor_model", "minimax/minimax-m2.5"),
         ai_provider=cfg.provider_for_role("quality_auditor"),
+        project_context=project_context_str,
     ))
 
     # Agent 4: Architecture Reviewer
@@ -116,6 +138,7 @@ async def _run_discovery(
         artifacts_dir=state.artifacts_dir,
         model=resolved_models.get("architecture_reviewer_model", "anthropic/claude-haiku-4.5"),
         ai_provider=cfg.provider_for_role("architecture_reviewer"),
+        project_context=project_context_str,
     ))
 
     results = await asyncio.gather(*coros, return_exceptions=True)
