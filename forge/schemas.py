@@ -211,6 +211,7 @@ class AuditFinding(BaseModel):
     pattern_slug: str = ""  # links to VulnerabilityPattern.slug
     data_flow: str = ""  # source -> transformation -> sink trace
     actionability: str = ""  # must_fix | should_fix | consider | informational
+    intent_signal: str = ""  # intentional | ambiguous | unintentional (set by Intent Analyzer)
 
 
 # ── Agent 2: Security Auditor ─────────────────────────────────────────
