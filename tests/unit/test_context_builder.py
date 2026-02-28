@@ -102,11 +102,11 @@ class TestBuildCodebaseInventory:
         for f in inventory:
             assert f["loc"] >= 0
 
-    def test_json_files_detected(self, sample_repo):
+    def test_json_files_excluded_from_loc(self, sample_repo):
+        """JSON files are data/config — excluded from source LOC count."""
         inventory = build_codebase_inventory(str(sample_repo))
         json_files = [f for f in inventory if f["path"].endswith(".json")]
-        assert len(json_files) > 0
-        assert all(f["language"] == "json" for f in json_files)
+        assert len(json_files) == 0
 
     def test_returns_list_of_dicts(self, sample_repo):
         inventory = build_codebase_inventory(str(sample_repo))

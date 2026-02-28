@@ -36,7 +36,7 @@ SKIP_DIRS = {
     "dist", "build", ".cache", "coverage", ".venv", "venv",
     ".artifacts", ".local-test", ".forge-worktrees", ".tox",
     "target", "vendor", ".mypy_cache", ".pytest_cache",
-    "out", "bin", "obj",
+    "out", "bin", "obj", "benchmarks",
 }
 # Lock files that use non-.lock extensions (e.g. package-lock.json)
 _LOCK_FILE_NAMES = {
@@ -321,6 +321,7 @@ def build_codebase_inventory(repo_path: str) -> list[dict]:
     root = Path(repo_path)
     inventory: list[dict] = []
 
+    # Only count actual source code toward LOC — exclude data/config/docs
     lang_map = {
         ".py": "python", ".js": "javascript", ".ts": "typescript",
         ".tsx": "typescript", ".jsx": "javascript", ".go": "go",
@@ -329,9 +330,7 @@ def build_codebase_inventory(repo_path: str) -> list[dict]:
         ".c": "c", ".swift": "swift", ".kt": "kotlin",
         ".vue": "vue", ".svelte": "svelte",
         ".css": "css", ".scss": "scss", ".html": "html",
-        ".sql": "sql", ".sh": "bash", ".yaml": "yaml",
-        ".yml": "yaml", ".json": "json", ".toml": "toml",
-        ".md": "markdown",
+        ".sql": "sql", ".sh": "bash",
     }
 
     for dirpath, dirnames, filenames in os.walk(root):
