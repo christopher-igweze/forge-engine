@@ -70,6 +70,7 @@ class HiveOrchestrator:
         self.project_context = project_context or {}
 
         self._graph: CodeGraph | None = None
+        self._conventions_context: str = ""
         self._total_invocations: int = 0
 
     async def run(self) -> dict:
@@ -106,6 +107,22 @@ class HiveOrchestrator:
             len(self._graph.segments),
             layer0_time,
         )
+
+        # ── Layer 0b: Convention Extraction (deterministic, no LLM) ──
+        try:
+            from forge.conventions import (
+                ConventionsExtractor,
+                build_conventions_context_string,
+            )
+            conventions = ConventionsExtractor(self.repo_path).extract()
+            self._conventions_context = build_conventions_context_string(conventions)
+            if self._conventions_context:
+                logger.info(
+                    "Hive Discovery: Layer 0b — %d config files parsed for conventions",
+                    len(conventions.config_files_found),
+                )
+        except Exception as e:
+            logger.warning("Convention extraction failed (non-fatal): %s", e)
 
         # Save Layer 0 artifact
         self._save_artifact("hive/layer0_graph.json", self._graph.get_enriched_graph())
@@ -269,15 +286,22 @@ class HiveOrchestrator:
             return ""
 
     def _build_project_context(self) -> str:
-        """Build project context string from user-provided metadata."""
-        if not self.project_context:
-            return ""
-        try:
-            from forge.prompts.project_context import build_project_context_string
-            return build_project_context_string(self.project_context)
-        except Exception as exc:
-            logger.warning("Failed to build project context: %s", exc)
-            return ""
+        """Build project context string from user-provided metadata + auto-detected conventions."""
+        parts: list[str] = []
+
+        if self.project_context:
+            try:
+                from forge.prompts.project_context import build_project_context_string
+                user_ctx = build_project_context_string(self.project_context)
+                if user_ctx:
+                    parts.append(user_ctx)
+            except Exception as exc:
+                logger.warning("Failed to build project context: %s", exc)
+
+        if self._conventions_context:
+            parts.append(self._conventions_context)
+
+        return "\n\n".join(parts)
 
     def _save_artifact(self, rel_path: str, data: Any) -> None:
         """Save a JSON artifact."""
