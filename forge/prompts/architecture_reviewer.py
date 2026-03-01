@@ -71,11 +71,16 @@ def architecture_review_task_prompt(
     codebase_map_json: str,
     module_dependency_graph: str = "",
     repo_url: str = "",
+    project_context: str = "",
 ) -> str:
     """Build the task prompt for the architecture review."""
     parts = []
     if repo_url:
         parts.append(f"Repository: {repo_url}\n")
+
+    if project_context:
+        parts.append(project_context)
+        parts.append("")
 
     parts.append("## Codebase Map\n")
     parts.append(codebase_map_json)

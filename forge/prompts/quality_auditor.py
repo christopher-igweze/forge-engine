@@ -122,11 +122,16 @@ def quality_audit_task_prompt(
     codebase_map_json: str,
     relevant_file_contents: str,
     repo_url: str = "",
+    project_context: str = "",
 ) -> str:
     """Build the task prompt for a single quality audit pass."""
     parts = []
     if repo_url:
         parts.append(f"Repository: {repo_url}\n")
+
+    if project_context:
+        parts.append(project_context)
+        parts.append("")
 
     parts.append("## Codebase Structure\n")
     parts.append(codebase_map_json)

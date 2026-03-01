@@ -30,6 +30,8 @@ FORGE_ROLE_TO_MODEL_FIELD: dict[str, str] = {
     # Hive Discovery roles
     "swarm_worker": "swarm_worker_model",
     "synthesizer": "synthesizer_model",
+    # Post-discovery intent analysis
+    "intent_analyzer": "intent_analyzer_model",
 }
 
 # ── Default model assignments per spec ────────────────────────────────
@@ -53,6 +55,8 @@ FORGE_DEFAULT_MODELS: dict[str, str] = {
     # Hive Discovery — cheap workers + strong synthesizer
     "swarm_worker_model": "minimax/minimax-m2.5",
     "synthesizer_model": "anthropic/claude-sonnet-4.6",
+    # Post-discovery intent analysis — cheap
+    "intent_analyzer_model": "minimax/minimax-m2.5",
 }
 
 # ── Provider routing ──────────────────────────────────────────────────
@@ -76,6 +80,8 @@ ROLE_TO_PROVIDER: dict[str, str] = {
     # Hive Discovery
     "swarm_worker": "openrouter_direct",
     "synthesizer": "openrouter_direct",
+    # Post-discovery
+    "intent_analyzer": "openrouter_direct",
 }
 
 

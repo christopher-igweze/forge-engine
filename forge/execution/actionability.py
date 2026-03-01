@@ -59,6 +59,11 @@ def classify_actionability(
     known_compromises = ctx.get("known_compromises", [])
     stage = ctx.get("project_stage", "")
 
+    # Intent signal from Intent Analyzer — intentional patterns are informational
+    intent = _get_field(finding, "intent_signal", "")
+    if intent == "intentional":
+        return "informational"
+
     # Check if finding overlaps with a known compromise
     if known_compromises:
         description = _get_field(finding, "description", "").lower()

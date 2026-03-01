@@ -5,11 +5,14 @@ import os
 
 import pytest
 
+from unittest.mock import patch
+
 from forge.execution.telemetry import (
     ForgeTelemetry,
     MODEL_PRICING,
     DEFAULT_PRICING,
     AgentInvocationLog,
+    _write_json,
 )
 
 
@@ -262,3 +265,22 @@ class TestFlush:
         data = json.loads(training_path.read_text().strip())
         assert data["finding_id"] == "F-001"
         assert data["files_changed"] == ["a.py"]
+
+
+class TestFlushResilience:
+    """Tests for telemetry I/O error resilience."""
+
+    def test_flush_oserror_does_not_crash(self, tmp_path):
+        t = ForgeTelemetry(artifacts_dir=str(tmp_path))
+        t.log_invocation(
+            agent_name="test", model="test/model",
+            input_tokens=100, output_tokens=50,
+        )
+        with patch("os.makedirs", side_effect=OSError("permission denied")):
+            # Should not raise — flush is non-fatal
+            t.flush()
+
+    def test_write_json_oserror_does_not_crash(self):
+        with patch("builtins.open", side_effect=OSError("disk full")):
+            # Should not raise — _write_json catches OSError
+            _write_json("/nonexistent/path.json", {"key": "value"})

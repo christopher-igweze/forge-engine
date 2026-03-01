@@ -256,33 +256,39 @@ class ForgeTelemetry:
             logger.warning("No artifacts_dir set -- skipping telemetry flush")
             return
 
-        telemetry_dir = os.path.join(self.artifacts_dir, "telemetry")
-        os.makedirs(telemetry_dir, exist_ok=True)
+        try:
+            telemetry_dir = os.path.join(self.artifacts_dir, "telemetry")
+            os.makedirs(telemetry_dir, exist_ok=True)
 
-        # Cost summary
-        summary_path = os.path.join(telemetry_dir, "cost_summary.json")
-        _write_json(summary_path, self.summary())
+            # Cost summary
+            summary_path = os.path.join(telemetry_dir, "cost_summary.json")
+            _write_json(summary_path, self.summary())
 
-        # Full invocation log
-        invocations_path = os.path.join(telemetry_dir, "invocations.jsonl")
-        with open(invocations_path, "w") as f:
-            for inv in self.invocations:
-                f.write(json.dumps(asdict(inv)) + "\n")
+            # Full invocation log
+            invocations_path = os.path.join(telemetry_dir, "invocations.jsonl")
+            with open(invocations_path, "w") as f:
+                for inv in self.invocations:
+                    f.write(json.dumps(asdict(inv)) + "\n")
 
-        # Training data
-        if self.training_data:
-            training_path = os.path.join(telemetry_dir, "training_data.jsonl")
-            with open(training_path, "w") as f:
-                for entry in self.training_data:
-                    f.write(json.dumps(asdict(entry)) + "\n")
+            # Training data
+            if self.training_data:
+                training_path = os.path.join(telemetry_dir, "training_data.jsonl")
+                with open(training_path, "w") as f:
+                    for entry in self.training_data:
+                        f.write(json.dumps(asdict(entry)) + "\n")
 
-        logger.info(
-            "Telemetry flushed: %d invocations, $%.4f total, %d training pairs",
-            len(self.invocations), self.total_cost, len(self.training_data),
-        )
+            logger.info(
+                "Telemetry flushed: %d invocations, $%.4f total, %d training pairs",
+                len(self.invocations), self.total_cost, len(self.training_data),
+            )
+        except OSError as e:
+            logger.warning("Telemetry flush failed (non-fatal): %s", e)
 
 
 def _write_json(path: str, data: Any) -> None:
     """Write JSON to a file."""
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2, default=str)
+    try:
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2, default=str)
+    except OSError as e:
+        logger.warning("Failed to write telemetry file %s: %s", path, e)

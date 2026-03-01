@@ -40,6 +40,16 @@ def _check_api_key(api_key: str | None) -> str:
             err=True,
         )
         raise typer.Exit(1)
+    # Warn on obviously invalid format (OpenRouter keys start with sk-or-)
+    if not key.startswith("sk-or-"):
+        typer.echo(
+            "Warning: API key does not match expected OpenRouter format (sk-or-...).\n"
+            "If this is intentional, you can ignore this warning.",
+            err=True,
+        )
+    # Intentional side effect: downstream code (ForgeConfig, AgentAI client,
+    # standalone dispatcher) reads OPENROUTER_API_KEY from the environment.
+    # This avoids threading the key through every function in the call chain.
     os.environ["OPENROUTER_API_KEY"] = key
     return key
 

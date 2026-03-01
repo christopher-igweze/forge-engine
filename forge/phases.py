@@ -1,0 +1,573 @@
+"""FORGE pipeline phase orchestrators.
+
+Each function accepts a duck-typed *dispatcher* (anything with a ``.call()``
+method) so it works with both the AgentField ``app`` and the standalone
+``StandaloneDispatcher``.
+
+Extracted from ``forge/app.py`` for clarity.  All names are re-exported
+from ``forge.app`` so existing ``from forge.app import ...`` still works.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import TYPE_CHECKING
+
+from forge.app_helpers import NODE_ID, _filter_execution_levels, _unwrap_to_model
+from forge.schemas import (
+    AuditFinding,
+    CodebaseMap,
+    ForgeExecutionState,
+    IntegrationValidationResult,
+    ProductionReadinessReport,
+    RemediationPlan,
+    TriageResult,
+)
+
+if TYPE_CHECKING:
+    from forge.config import ForgeConfig
+
+logger = logging.getLogger(__name__)
+
+
+# ── Internal Pipeline Stages ─────────────────────────────────────────
+
+
+async def _run_discovery(
+    app,
+    state: ForgeExecutionState,
+    cfg: ForgeConfig,
+    resolved_models: dict[str, str],
+) -> dict:
+    """Run Discovery phase: Agents 1-4 (classic) or Hive Discovery (swarm)."""
+
+    # ── Swarm mode: delegate to Hive Discovery ───────────────────────
+    if cfg.discovery_mode == "swarm":
+        return await _run_swarm_discovery(app, state, cfg, resolved_models)
+
+    # ── Classic mode: sequential Agent 1 → parallel Agents 2-4 ───────
+    invocations = 0
+
+    # Agent 1: Codebase Analyst (always runs first — everything depends on it)
+    logger.info("Discovery: Running Agent 1 (Codebase Analyst)")
+    codebase_map_dict = await app.call(
+        f"{NODE_ID}.run_codebase_analyst",
+        repo_path=state.repo_path,
+        repo_url=state.repo_url,
+        artifacts_dir=state.artifacts_dir,
+        model=resolved_models.get("codebase_analyst_model", "minimax/minimax-m2.5"),
+        ai_provider=cfg.provider_for_role("codebase_analyst"),
+    )
+    unwrapped = _unwrap_to_model(codebase_map_dict)
+    if isinstance(unwrapped, dict):
+        try:
+            state.codebase_map = CodebaseMap(**unwrapped)
+        except Exception:
+            state.codebase_map = unwrapped  # fallback to raw dict
+    else:
+        state.codebase_map = unwrapped
+    invocations += 1
+
+    # Agents 2, 3, 4: Run in parallel (all depend only on CodebaseMap)
+    logger.info("Discovery: Running Agents 2-4 in parallel")
+
+    coros = []
+    # Build project context string for prompt injection (zero LLM cost)
+    project_context_str = ""
+    if cfg.project_context:
+        try:
+            from forge.prompts.project_context import build_project_context_string
+            project_context_str = build_project_context_string(cfg.project_context)
+        except Exception as e:
+            logger.warning("Failed to build project context: %s", e)
+
+    # Auto-detect project conventions (deterministic, zero LLM)
+    try:
+        from forge.conventions import (
+            ConventionsExtractor,
+            build_conventions_context_string,
+        )
+        conventions = ConventionsExtractor(state.repo_path).extract()
+        conventions_str = build_conventions_context_string(conventions)
+        if conventions_str:
+            project_context_str = (
+                f"{project_context_str}\n\n{conventions_str}"
+                if project_context_str
+                else conventions_str
+            )
+            logger.info(
+                "Discovery: Auto-detected conventions from %d config files",
+                len(conventions.config_files_found),
+            )
+    except Exception as e:
+        logger.warning("Convention extraction failed (non-fatal): %s", e)
+
+    # Agent 2: Security Auditor
+    coros.append(app.call(
+        f"{NODE_ID}.run_security_auditor",
+        repo_path=state.repo_path,
+        codebase_map=codebase_map_dict if isinstance(codebase_map_dict, dict)
+        else codebase_map_dict,
+        artifacts_dir=state.artifacts_dir,
+        model=resolved_models.get("security_auditor_model", "anthropic/claude-haiku-4.5"),
+        ai_provider=cfg.provider_for_role("security_auditor"),
+        parallel=cfg.enable_parallel_audit,
+        pattern_library_path=cfg.pattern_library_path,
+        project_context=project_context_str,
+    ))
+
+    # Agent 3: Quality Auditor
+    coros.append(app.call(
+        f"{NODE_ID}.run_quality_auditor",
+        repo_path=state.repo_path,
+        codebase_map=codebase_map_dict if isinstance(codebase_map_dict, dict)
+        else codebase_map_dict,
+        artifacts_dir=state.artifacts_dir,
+        model=resolved_models.get("quality_auditor_model", "minimax/minimax-m2.5"),
+        ai_provider=cfg.provider_for_role("quality_auditor"),
+        project_context=project_context_str,
+    ))
+
+    # Agent 4: Architecture Reviewer
+    coros.append(app.call(
+        f"{NODE_ID}.run_architecture_reviewer",
+        repo_path=state.repo_path,
+        codebase_map=codebase_map_dict if isinstance(codebase_map_dict, dict)
+        else codebase_map_dict,
+        artifacts_dir=state.artifacts_dir,
+        model=resolved_models.get("architecture_reviewer_model", "anthropic/claude-haiku-4.5"),
+        ai_provider=cfg.provider_for_role("architecture_reviewer"),
+        project_context=project_context_str,
+    ))
+
+    results = await asyncio.gather(*coros, return_exceptions=True)
+    invocations += 3  # 3 agents called (security has 3 sub-passes but is 1 agent)
+
+    # Parse results
+    for i, r in enumerate(results):
+        if isinstance(r, Exception):
+            logger.error("Discovery agent %d failed: %s", i + 2, r)
+            continue
+
+        result_dict = r if isinstance(r, dict) else {}
+
+        if i == 0:  # Security
+            state.security_findings = [
+                AuditFinding(**f) for f in result_dict.get("findings", [])
+            ]
+        elif i == 1:  # Quality
+            state.quality_findings = [
+                AuditFinding(**f) for f in result_dict.get("findings", [])
+            ]
+        elif i == 2:  # Architecture
+            state.architecture_findings = [
+                AuditFinding(**f) for f in result_dict.get("findings", [])
+            ]
+
+    # Merge all findings
+    state.all_findings = (
+        state.security_findings +
+        state.quality_findings +
+        state.architecture_findings
+    )
+
+    # Intent analysis (LLM-based reasoning about developer intent)
+    if state.all_findings:
+        try:
+            from forge.execution.intent_analyzer import analyze_intent
+            _conventions = conventions if "conventions" in dir() else None
+            intent_result = await analyze_intent(
+                findings=state.all_findings,
+                repo_path=state.repo_path,
+                conventions=_conventions,
+                model=cfg.model_for_role("intent_analyzer"),
+                ai_provider=cfg.provider_for_role("intent_analyzer"),
+            )
+            if intent_result.decisions:
+                invocations += 1
+                logger.info(
+                    "Intent analysis: %d intentional, %d ambiguous, %d unintentional "
+                    "(%d deterministic)",
+                    intent_result.intentional_count,
+                    intent_result.ambiguous_count,
+                    intent_result.unintentional_count,
+                    intent_result.deterministic_count,
+                )
+        except Exception as e:
+            logger.warning("Intent analysis failed (non-fatal): %s", e)
+
+    # Apply actionability classification (deterministic post-processing)
+    if state.all_findings:
+        try:
+            from forge.execution.actionability import apply_actionability
+            apply_actionability(state.all_findings, cfg.project_context)
+        except Exception as e:
+            logger.warning("Actionability classification failed (non-fatal): %s", e)
+
+    logger.info(
+        "Discovery complete: %d security, %d quality, %d architecture findings",
+        len(state.security_findings),
+        len(state.quality_findings),
+        len(state.architecture_findings),
+    )
+
+    return {"invocations": invocations}
+
+
+async def _run_swarm_discovery(
+    app,
+    state: ForgeExecutionState,
+    cfg: ForgeConfig,
+    resolved_models: dict[str, str],
+) -> dict:
+    """Run Discovery via Hive Discovery (swarm mode).
+
+    Replaces Agents 1-6 with Layer 0 (deterministic graph) + Layer 1
+    (parallel swarm workers) + Layer 2 (sonnet synthesis).
+    """
+    logger.info("Discovery [swarm]: Running Hive Discovery pipeline")
+
+    hive_result = await app.call(
+        f"{NODE_ID}.run_hive_discovery",
+        repo_path=state.repo_path,
+        repo_url=state.repo_url,
+        artifacts_dir=state.artifacts_dir,
+        worker_model=resolved_models.get("swarm_worker_model", "minimax/minimax-m2.5"),
+        synthesis_model=resolved_models.get("synthesizer_model", "anthropic/claude-sonnet-4.6"),
+        ai_provider=cfg.provider_for_role("swarm_worker"),
+        target_segments=cfg.swarm_target_segments,
+        enable_wave2=cfg.swarm_enable_wave2,
+        worker_types=cfg.swarm_worker_types,
+        pattern_library_path=cfg.pattern_library_path,
+        project_context=cfg.project_context,
+    )
+
+    if not isinstance(hive_result, dict):
+        hive_result = {}
+
+    # Map hive result into ForgeExecutionState
+    cm_data = hive_result.get("codebase_map", {})
+    if isinstance(cm_data, dict):
+        # Ensure required fields exist
+        cm_data.setdefault("files", [])
+        cm_data.setdefault("loc_total", 0)
+        cm_data.setdefault("file_count", 0)
+        cm_data.setdefault("primary_language", "")
+        cm_data.setdefault("languages", [])
+        state.codebase_map = CodebaseMap(**cm_data)
+
+    # Parse findings
+    from forge.reasoners.discovery import _normalize_finding
+    findings_data = hive_result.get("findings", [])
+    all_findings = []
+    for f_data in findings_data:
+        if isinstance(f_data, dict):
+            f_data.setdefault("category", "quality")
+            f_data.setdefault("severity", "medium")
+            f_data.setdefault("title", "Untitled finding")
+            f_data.setdefault("description", "")
+            _normalize_finding(f_data)
+            try:
+                all_findings.append(AuditFinding(**f_data))
+            except Exception as e:
+                logger.warning("Failed to parse hive finding: %s", e)
+
+    # Categorize findings
+    state.security_findings = [f for f in all_findings if f.category.value == "security"]
+    state.quality_findings = [f for f in all_findings if f.category.value == "quality"]
+    state.architecture_findings = [f for f in all_findings if f.category.value == "architecture"]
+    state.all_findings = all_findings
+
+    # Intent analysis (LLM-based reasoning about developer intent)
+    if state.all_findings:
+        try:
+            from forge.execution.intent_analyzer import analyze_intent
+            intent_result = await analyze_intent(
+                findings=state.all_findings,
+                repo_path=state.repo_path,
+                conventions=None,  # swarm doesn't extract conventions separately
+                model=cfg.model_for_role("intent_analyzer"),
+                ai_provider=cfg.provider_for_role("intent_analyzer"),
+            )
+            if intent_result.decisions:
+                logger.info(
+                    "Intent analysis: %d intentional, %d ambiguous, %d unintentional",
+                    intent_result.intentional_count,
+                    intent_result.ambiguous_count,
+                    intent_result.unintentional_count,
+                )
+        except Exception as e:
+            logger.warning("Intent analysis failed (non-fatal): %s", e)
+
+    # Apply actionability classification (deterministic post-processing)
+    if state.all_findings:
+        try:
+            from forge.execution.actionability import apply_actionability
+            apply_actionability(state.all_findings, cfg.project_context)
+        except Exception as e:
+            logger.warning("Actionability classification failed (non-fatal): %s", e)
+
+    # Parse triage result
+    triage_data = hive_result.get("triage_result", {})
+    if isinstance(triage_data, dict) and triage_data.get("decisions"):
+        state.triage_result = TriageResult(**triage_data)
+
+    # Parse remediation plan
+    plan_data = hive_result.get("remediation_plan", {})
+    if isinstance(plan_data, dict) and plan_data.get("items"):
+        state.remediation_plan = RemediationPlan(**plan_data)
+
+    invocations = hive_result.get("stats", {}).get("total_invocations", 1)
+
+    logger.info(
+        "Discovery [swarm]: complete — %d security, %d quality, %d architecture findings",
+        len(state.security_findings),
+        len(state.quality_findings),
+        len(state.architecture_findings),
+    )
+
+    return {"invocations": invocations}
+
+
+async def _run_triage(
+    app,
+    state: ForgeExecutionState,
+    cfg: ForgeConfig,
+    resolved_models: dict[str, str],
+    tier1_findings: list[dict] | None = None,
+) -> dict:
+    """Run Triage phase: Agents 5-6.
+
+    In swarm mode, triage and planning are already done by the synthesis
+    agent in Layer 2. Skip if state already has triage + plan.
+    """
+    invocations = 0
+
+    if not state.all_findings:
+        logger.info("Triage: No findings to triage")
+        return {"invocations": 0}
+
+    # Swarm mode: synthesis already produced triage + plan
+    if (
+        cfg.discovery_mode == "swarm"
+        and state.triage_result is not None
+        and state.remediation_plan is not None
+    ):
+        logger.info("Triage: skipping — swarm synthesis already produced triage + plan")
+        return {"invocations": 0}
+
+    all_findings_dicts = [f.model_dump() for f in state.all_findings]
+
+    # Merge Tier 1 findings if provided
+    if tier1_findings:
+        for t1f in tier1_findings:
+            # Convert Tier1Finding format to AuditFinding format
+            all_findings_dicts.append({
+                "id": t1f.get("check_id", t1f.get("id", "")),
+                "title": t1f.get("title", ""),
+                "description": t1f.get("description", ""),
+                "category": t1f.get("category", "quality"),
+                "severity": t1f.get("severity", "medium"),
+                "locations": [{"file_path": loc} for loc in t1f.get("locations", [])],
+                "suggested_fix": t1f.get("suggested_fix", ""),
+                "agent": "tier1_scanner",
+            })
+
+    if state.codebase_map is None:
+        codebase_map_dict = {}
+    elif isinstance(state.codebase_map, dict):
+        codebase_map_dict = state.codebase_map
+    else:
+        codebase_map_dict = state.codebase_map.model_dump()
+
+    # Agent 6: Triage Classifier
+    logger.info("Triage: Running Agent 6 (Triage Classifier)")
+    triage_dict = await app.call(
+        f"{NODE_ID}.run_triage_classifier",
+        findings=all_findings_dicts,
+        codebase_map=codebase_map_dict,
+        artifacts_dir=state.artifacts_dir,
+        model=resolved_models.get("triage_classifier_model", "anthropic/claude-haiku-4.5"),
+        ai_provider=cfg.provider_for_role("triage_classifier"),
+    )
+    if isinstance(triage_dict, dict):
+        state.triage_result = TriageResult(**triage_dict)
+    invocations += 1
+
+    # Agent 5: Fix Strategist
+    logger.info("Triage: Running Agent 5 (Fix Strategist)")
+    plan_dict = await app.call(
+        f"{NODE_ID}.run_fix_strategist",
+        all_findings=all_findings_dicts,
+        codebase_map=codebase_map_dict,
+        triage_result=triage_dict if isinstance(triage_dict, dict) else None,
+        artifacts_dir=state.artifacts_dir,
+        model=resolved_models.get("fix_strategist_model", "anthropic/claude-haiku-4.5"),
+        ai_provider=cfg.provider_for_role("fix_strategist"),
+    )
+    if isinstance(plan_dict, dict):
+        state.remediation_plan = RemediationPlan(**plan_dict)
+    invocations += 1
+
+    # Write tier assignments back to the finding objects so reports show them
+    if state.triage_result and state.triage_result.decisions:
+        tier_map = {d.finding_id: d.tier for d in state.triage_result.decisions}
+        for finding in state.all_findings:
+            if finding.id in tier_map:
+                finding.tier = tier_map[finding.id]
+
+    logger.info(
+        "Triage complete: %d items in remediation plan",
+        state.remediation_plan.total_items if state.remediation_plan else 0,
+    )
+
+    return {"invocations": invocations}
+
+
+async def _run_remediation(
+    app,
+    state: ForgeExecutionState,
+    cfg: ForgeConfig,
+    resolved_models: dict[str, str],
+) -> dict:
+    """Run Remediation phase: Tier routing + Agents 7-10 via control loops."""
+    from forge.execution.tier_router import route_plan_items
+    from forge.execution.forge_executor import execute_remediation
+
+    invocations = 0
+
+    if not state.remediation_plan or not state.remediation_plan.items:
+        logger.info("Remediation: no plan items to execute")
+        return {"invocations": 0}
+
+    # ── Step 3a: Tier 0/1 — deterministic fixes ──────────────────────
+    logger.info("Remediation: routing %d items through tier router", len(state.remediation_plan.items))
+    handled, ai_items = route_plan_items(
+        state.remediation_plan,
+        state.all_findings,
+        state,
+        state.repo_path,
+        cfg,
+    )
+    invocations += len(handled)  # Tier 0/1 count as 1 invocation each
+
+    if not ai_items:
+        logger.info("Remediation: all items handled by Tier 0/1 — skipping AI pipeline")
+        return {"invocations": invocations}
+
+    # ── Step 3b: Tier 2/3 — AI-assisted fixes via control loops ──────
+    # Build a filtered plan with only AI items
+    ai_plan = RemediationPlan(
+        items=ai_items,
+        execution_levels=_filter_execution_levels(
+            state.remediation_plan.execution_levels,
+            {item.finding_id for item in ai_items},
+        ),
+        total_items=len(ai_items),
+    )
+    state.remediation_plan = ai_plan
+
+    logger.info(
+        "Remediation: executing %d AI items across %d levels",
+        len(ai_items), len(ai_plan.execution_levels),
+    )
+
+    await execute_remediation(app, NODE_ID, state, cfg, resolved_models)
+    invocations += state.total_agent_invocations  # executor tracks its own
+
+    logger.info(
+        "Remediation complete: %d fixed, %d deferred",
+        len(state.completed_fixes), len(state.outer_loop.deferred_findings),
+    )
+
+    return {"invocations": invocations}
+
+
+async def _run_validation(
+    app,
+    state: ForgeExecutionState,
+    cfg: ForgeConfig,
+    resolved_models: dict[str, str],
+) -> dict:
+    """Run Validation phase: Agents 11-12."""
+    invocations = 0
+
+    if not state.completed_fixes:
+        logger.info("Validation: no fixes to validate")
+        return {"invocations": 0}
+
+    all_findings_json = [f.model_dump() for f in state.all_findings]
+    all_fixes_json = [f.model_dump() for f in state.completed_fixes]
+    deferred_items = [
+        {"finding_id": fid}
+        for fid in state.outer_loop.deferred_findings
+    ]
+
+    # Agent 11: Integration Validator
+    logger.info("Validation: Running Agent 11 (Integration Validator)")
+    try:
+        validation_dict = await app.call(
+            f"{NODE_ID}.run_integration_validator",
+            repo_path=state.repo_path,
+            all_findings=all_findings_json,
+            all_fixes=all_fixes_json,
+            artifacts_dir=state.artifacts_dir,
+            model=resolved_models.get("integration_validator_model", "anthropic/claude-haiku-4.5"),
+            ai_provider=cfg.provider_for_role("integration_validator"),
+        )
+        if isinstance(validation_dict, dict):
+            state.integration_result = IntegrationValidationResult(
+                **_unwrap_to_model(validation_dict)
+                if isinstance(_unwrap_to_model(validation_dict), dict)
+                else {}
+            )
+        invocations += 1
+    except Exception as e:
+        logger.error("Integration validator failed: %s", e)
+        state.integration_result = IntegrationValidationResult(
+            passed=False, summary=f"Validator failed: {e}",
+        )
+
+    # Agent 12: Debt Tracker & Report Generator
+    logger.info("Validation: Running Agent 12 (Debt Tracker)")
+    try:
+        report_dict = await app.call(
+            f"{NODE_ID}.run_debt_tracker",
+            all_findings=all_findings_json,
+            completed_fixes=all_fixes_json,
+            deferred_items=deferred_items,
+            validation_result=state.integration_result.model_dump()
+            if state.integration_result else {},
+            artifacts_dir=state.artifacts_dir,
+            model=resolved_models.get("debt_tracker_model", "minimax/minimax-m2.5"),
+            ai_provider=cfg.provider_for_role("debt_tracker"),
+        )
+        if isinstance(report_dict, dict):
+            unwrapped = _unwrap_to_model(report_dict)
+            if isinstance(unwrapped, dict):
+                state.readiness_report = ProductionReadinessReport(**unwrapped)
+        invocations += 1
+    except Exception as e:
+        logger.error("Debt tracker failed: %s", e)
+
+    # Generate formatted reports (JSON + HTML + PDF if weasyprint available)
+    if state.readiness_report:
+        try:
+            from forge.execution.report import generate_reports
+            report_paths = generate_reports(
+                state.readiness_report,
+                state.artifacts_dir,
+                run_id=state.forge_run_id,
+            )
+            logger.info("Reports generated: %s", ", ".join(report_paths.keys()))
+        except Exception as e:
+            logger.error("Report generation failed: %s", e)
+
+    logger.info(
+        "Validation complete: integration=%s, readiness_score=%d",
+        "PASS" if state.integration_result and state.integration_result.passed else "FAIL",
+        state.readiness_report.overall_score if state.readiness_report else 0,
+    )
+
+    return {"invocations": invocations}
