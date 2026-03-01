@@ -172,6 +172,31 @@ async def _run_discovery(
         state.architecture_findings
     )
 
+    # Intent analysis (LLM-based reasoning about developer intent)
+    if state.all_findings:
+        try:
+            from forge.execution.intent_analyzer import analyze_intent
+            _conventions = conventions if "conventions" in dir() else None
+            intent_result = await analyze_intent(
+                findings=state.all_findings,
+                repo_path=state.repo_path,
+                conventions=_conventions,
+                model=cfg.model_for_role("intent_analyzer"),
+                ai_provider=cfg.provider_for_role("intent_analyzer"),
+            )
+            if intent_result.decisions:
+                invocations += 1
+                logger.info(
+                    "Intent analysis: %d intentional, %d ambiguous, %d unintentional "
+                    "(%d deterministic)",
+                    intent_result.intentional_count,
+                    intent_result.ambiguous_count,
+                    intent_result.unintentional_count,
+                    intent_result.deterministic_count,
+                )
+        except Exception as e:
+            logger.warning("Intent analysis failed (non-fatal): %s", e)
+
     # Apply actionability classification (deterministic post-processing)
     if state.all_findings:
         try:
@@ -253,6 +278,27 @@ async def _run_swarm_discovery(
     state.quality_findings = [f for f in all_findings if f.category.value == "quality"]
     state.architecture_findings = [f for f in all_findings if f.category.value == "architecture"]
     state.all_findings = all_findings
+
+    # Intent analysis (LLM-based reasoning about developer intent)
+    if state.all_findings:
+        try:
+            from forge.execution.intent_analyzer import analyze_intent
+            intent_result = await analyze_intent(
+                findings=state.all_findings,
+                repo_path=state.repo_path,
+                conventions=None,  # swarm doesn't extract conventions separately
+                model=cfg.model_for_role("intent_analyzer"),
+                ai_provider=cfg.provider_for_role("intent_analyzer"),
+            )
+            if intent_result.decisions:
+                logger.info(
+                    "Intent analysis: %d intentional, %d ambiguous, %d unintentional",
+                    intent_result.intentional_count,
+                    intent_result.ambiguous_count,
+                    intent_result.unintentional_count,
+                )
+        except Exception as e:
+            logger.warning("Intent analysis failed (non-fatal): %s", e)
 
     # Apply actionability classification (deterministic post-processing)
     if state.all_findings:

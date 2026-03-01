@@ -70,6 +70,15 @@ def _rule_based_triage(
     """
     title_lower = (finding.title + " " + finding.description).lower()
 
+    # Intent signal from Intent Analyzer → intentional patterns are Tier 0
+    if getattr(finding, "intent_signal", "") == "intentional":
+        return TriageDecision(
+            finding_id=finding.id,
+            tier=RemediationTier.TIER_0,
+            confidence=0.9,
+            rationale="Flagged as intentional developer choice by Intent Analyzer",
+        )
+
     # Check for Tier 0 signals
     for signal in TIER_0_SIGNALS:
         if signal in title_lower:
