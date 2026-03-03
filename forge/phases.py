@@ -557,7 +557,7 @@ async def _run_validation(
             f"{NODE_ID}.run_integration_validator",
             repo_path=state.repo_path,
             all_findings=all_findings_json,
-            all_fixes=all_fixes_json,
+            completed_fixes=all_fixes_json,
             artifacts_dir=state.artifacts_dir,
             model=resolved_models.get("integration_validator_model", "anthropic/claude-haiku-4.5"),
             ai_provider=cfg.provider_for_role("integration_validator"),
