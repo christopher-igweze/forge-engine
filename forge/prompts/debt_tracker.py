@@ -31,7 +31,7 @@ Produce a Production Readiness Report with:
 - Per-category scores with details
 - Fixed issues summary
 - Deferred issues with severity and reason
-- Top 3-5 actionable recommendations
+- Top 3-5 actionable recommendations (each with priority, title, description, impact)
 - Investor-friendly summary (2-3 sentences)
 
 Respond with a JSON object matching this exact schema:
@@ -51,7 +51,11 @@ Respond with a JSON object matching this exact schema:
     {"title": "Missing rate limiting on /api/upload", "description": "...", "severity": "high", "source_finding_id": "F-042", "reason_deferred": "Requires infrastructure changes"}
   ],
   "summary": "Remediation addressed 15 of 18 planned fixes...",
-  "recommendations": ["Add integration tests for auth flow", "Implement rate limiting", "Add API documentation"],
+  "recommendations": [
+    {"priority": 1, "title": "Add integration tests for auth flow", "description": "Auth endpoints lack end-to-end test coverage", "impact": "high"},
+    {"priority": 2, "title": "Implement rate limiting", "description": "Public API endpoints are vulnerable to abuse without rate limits", "impact": "critical"},
+    {"priority": 3, "title": "Add API documentation", "description": "Missing OpenAPI/Swagger docs for consumer-facing endpoints", "impact": "medium"}
+  ],
   "investor_summary": "Codebase hardened from prototype to near-production quality. 15 critical issues resolved, readiness score improved from ~30 to 72/100."
 }
 ```

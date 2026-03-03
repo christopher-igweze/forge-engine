@@ -11,7 +11,7 @@ from enum import Enum
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # ── Enums ─────────────────────────────────────────────────────────────
@@ -397,6 +397,15 @@ class IntegrationValidationResult(BaseModel):
 # ── Agent 12: Debt Tracker & Report Generator ─────────────────────────
 
 
+class Recommendation(BaseModel):
+    """A single actionable recommendation for production readiness."""
+
+    priority: int = Field(default=1, ge=1)
+    title: str
+    description: str = ""
+    impact: str = "medium"  # critical | high | medium | low
+
+
 class DebtEntry(BaseModel):
     """A single piece of technical debt."""
 
@@ -430,8 +439,26 @@ class ProductionReadinessReport(BaseModel):
     findings_deferred: int = 0
     debt_items: list[DebtEntry] = Field(default_factory=list)
     summary: str = ""
-    recommendations: list[str] = Field(default_factory=list)
+    recommendations: list[Recommendation] = Field(default_factory=list)
     investor_summary: str = ""
+
+    @field_validator("recommendations", mode="before")
+    @classmethod
+    def _normalize_recommendations(cls, v: list) -> list[dict]:
+        """Accept plain strings, dicts, or Recommendation objects."""
+        normalized = []
+        for i, item in enumerate(v):
+            if isinstance(item, str):
+                normalized.append({"priority": i + 1, "title": item})
+            elif isinstance(item, dict):
+                # Ensure priority has a default
+                if "priority" not in item:
+                    item["priority"] = i + 1
+                normalized.append(item)
+            else:
+                # Already a Recommendation instance
+                normalized.append(item)
+        return normalized
 
 
 # ── Control Loop State ────────────────────────────────────────────────
