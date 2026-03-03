@@ -378,6 +378,23 @@ class ForgeCodeReviewResult(BaseModel):
     suggestions: list[str] = Field(default_factory=list)
     regression_risk: str = "LOW"  # LOW | MEDIUM | HIGH
 
+    @field_validator("issues", "suggestions", mode="before")
+    @classmethod
+    def _normalize_string_lists(cls, v: list) -> list[str]:
+        """Accept dicts or strings — LLMs often return structured objects."""
+        result = []
+        for item in v:
+            if isinstance(item, str):
+                result.append(item)
+            elif isinstance(item, dict):
+                # Extract the most informative field
+                desc = item.get("description", item.get("text", item.get("suggestion", "")))
+                cat = item.get("category", "")
+                result.append(f"[{cat}] {desc}" if cat and desc else desc or str(item))
+            else:
+                result.append(str(item))
+        return result
+
 
 # ── Agent 11: Integration Validator ───────────────────────────────────
 
@@ -392,6 +409,12 @@ class IntegrationValidationResult(BaseModel):
     regressions_detected: list[str] = Field(default_factory=list)
     new_issues_introduced: list[str] = Field(default_factory=list)
     summary: str = ""
+
+    @field_validator("regressions_detected", "new_issues_introduced", mode="before")
+    @classmethod
+    def _normalize_string_lists(cls, v: list) -> list[str]:
+        """Accept dicts or strings — LLMs often return structured objects."""
+        return [item if isinstance(item, str) else str(item.get("description", item)) if isinstance(item, dict) else str(item) for item in v]
 
 
 # ── Agent 12: Debt Tracker & Report Generator ─────────────────────────
