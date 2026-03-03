@@ -7,6 +7,7 @@ files relevant to its analysis focus.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -313,6 +314,24 @@ def select_files_for_quality_pass(
     return "\n".join(parts) if parts else "(no relevant files found)"
 
 
+def _count_notebook_loc(fpath: Path) -> int:
+    """Count source lines in Jupyter notebook code cells."""
+    try:
+        data = json.loads(fpath.read_text(errors="replace"))
+        cells = data.get("cells", [])
+        total = 0
+        for cell in cells:
+            if cell.get("cell_type") == "code":
+                source = cell.get("source", [])
+                if isinstance(source, list):
+                    total += len(source)
+                elif isinstance(source, str):
+                    total += source.count("\n") + (1 if source else 0)
+        return total
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return 0
+
+
 def build_codebase_inventory(repo_path: str) -> list[dict]:
     """Walk the repo and build a file inventory for the CodebaseMap.
 
@@ -331,6 +350,7 @@ def build_codebase_inventory(repo_path: str) -> list[dict]:
         ".vue": "vue", ".svelte": "svelte",
         ".css": "css", ".scss": "scss", ".html": "html",
         ".sql": "sql", ".sh": "bash",
+        ".ipynb": "jupyter",
         # Config/data files — visible for context but loc=0
         ".json": "json", ".yaml": "yaml", ".yml": "yaml",
         ".toml": "toml", ".md": "markdown",
@@ -341,6 +361,7 @@ def build_codebase_inventory(repo_path: str) -> list[dict]:
         ".rs", ".java", ".rb", ".php", ".cs", ".cpp",
         ".c", ".swift", ".kt", ".vue", ".svelte",
         ".css", ".scss", ".html", ".sql", ".sh",
+        ".ipynb",
     }
 
     for dirpath, dirnames, filenames in os.walk(root):
@@ -359,7 +380,10 @@ def build_codebase_inventory(repo_path: str) -> list[dict]:
             # Config/data files appear in inventory but don't inflate LOC
             if suffix in _source_extensions:
                 try:
-                    loc = sum(1 for _ in fpath.open(errors="replace"))
+                    if suffix == ".ipynb":
+                        loc = _count_notebook_loc(fpath)
+                    else:
+                        loc = sum(1 for _ in fpath.open(errors="replace"))
                 except OSError:
                     loc = 0
             else:

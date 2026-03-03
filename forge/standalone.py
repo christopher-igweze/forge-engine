@@ -27,6 +27,7 @@ from forge.config import ForgeConfig
 from forge.execution.json_utils import safe_parse_agent_response
 from forge.schemas import (
     AuditFinding,
+    FixOutcome,
     ForgeExecutionState,
     ForgeMode,
     ForgeResult,
@@ -366,13 +367,18 @@ async def run_standalone(
         __import__("datetime").timezone.utc
     )
 
+    actually_fixed = [
+        f for f in state.completed_fixes
+        if f.outcome in (FixOutcome.COMPLETED, FixOutcome.COMPLETED_WITH_DEBT)
+    ]
+
     result = ForgeResult(
         forge_run_id=state.forge_run_id,
         success=state.success,
         mode=state.mode,
         summary=_build_summary(state),
         total_findings=len(state.all_findings),
-        findings_fixed=len(state.completed_fixes),
+        findings_fixed=len(actually_fixed),
         findings_deferred=len(state.outer_loop.deferred_findings),
         agent_invocations=state.total_agent_invocations,
         cost_usd=state.estimated_cost_usd,

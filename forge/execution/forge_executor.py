@@ -109,6 +109,18 @@ async def run_inner_loop(
             review_feedback = coder_result.error_message
             continue
 
+        # Capture actual diff for reviewer context
+        actual_diff = ""
+        try:
+            import subprocess
+            _diff_proc = subprocess.run(
+                ["git", "diff", "HEAD"],
+                cwd=worktree_path, capture_output=True, text=True, timeout=30,
+            )
+            actual_diff = _diff_proc.stdout[:10000] if _diff_proc.returncode == 0 else ""
+        except Exception:
+            pass  # Non-fatal: reviewer works without diff, just less context
+
         # ── Step 2: Test Generator + Code Reviewer (parallel) ──────────
         test_coro = app.call(
             f"{node_id}.run_test_generator",
@@ -122,6 +134,7 @@ async def run_inner_loop(
             f"{node_id}.run_code_reviewer",
             finding=finding_dict,
             code_change=coder_result.model_dump(),
+            code_diff=actual_diff,
             codebase_map=codebase_map,
             model=resolved_models.get("code_reviewer_model", "anthropic/claude-haiku-4.5"),
             ai_provider=cfg.provider_for_role("code_reviewer"),
@@ -463,6 +476,17 @@ async def _execute_single_fix(
 
     codebase_map = state.codebase_map.model_dump() if state.codebase_map else None
 
+    # Skip .ipynb files — notebook remediation not yet supported
+    if finding.locations and all(
+        loc.file_path.endswith(".ipynb") for loc in finding.locations
+    ):
+        logger.info(
+            "Skipping %s — .ipynb remediation not supported", finding.title,
+        )
+        # Track as deferred — do NOT append to completed_fixes
+        state.outer_loop.deferred_findings.append(finding.id)
+        return
+
     # Create isolated worktree for this fix
     try:
         worktree_path = create_worktree(
@@ -505,9 +529,7 @@ async def _execute_single_fix(
 
         if escalation.action == EscalationAction.DEFER:
             state.outer_loop.deferred_findings.append(finding.id)
-            if inner_state.coder_result:
-                inner_state.coder_result.outcome = FixOutcome.DEFERRED
-                state.completed_fixes.append(inner_state.coder_result)
+            # Do NOT append to completed_fixes — deferred items tracked separately
 
         elif escalation.action == EscalationAction.RECLASSIFY and escalation.new_tier:
             # Promote to higher tier and retry
