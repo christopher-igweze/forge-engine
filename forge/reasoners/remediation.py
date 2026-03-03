@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
 
 from forge.vendor.agent_ai import AgentAI, AgentAIConfig
 from forge.vendor.agent_ai.types import Tool
@@ -43,6 +44,27 @@ logger = logging.getLogger(__name__)
 
 # Tools available to coding agents (includes NotebookEdit for .ipynb files)
 _CODER_TOOLS = [Tool.READ, Tool.WRITE, Tool.EDIT, Tool.BASH, Tool.GLOB, Tool.GREP, Tool.NOTEBOOK_EDIT]
+
+
+def _detect_changed_files_via_git(worktree_path: str) -> list[str]:
+    """Detect files changed in worktree using git diff.
+
+    This is the authoritative fallback when the coder's JSON response
+    can't be parsed and tool_uses aren't available (opencode provider).
+    """
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "HEAD"],
+            cwd=worktree_path,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return [f.strip() for f in result.stdout.strip().split("\n") if f.strip()]
+    except Exception:
+        pass
+    return []
 
 
 def _parse_json_response(text: str) -> dict:
@@ -119,15 +141,17 @@ async def run_coder_tier2(
     elif response.text:
         data = _parse_json_response(response.text)
 
-    # Determine outcome from tool uses
+    # Determine outcome — try 3 sources: parsed JSON, tool_uses, git diff
     files_changed = data.get("files_changed", [])
     if not files_changed:
-        # Infer from tool uses
         for tu in response.tool_uses:
             if tu.name in ("Write", "Edit") and "file_path" in tu.input:
                 fp = tu.input["file_path"]
                 if fp not in files_changed:
                     files_changed.append(fp)
+    if not files_changed:
+        # Authoritative fallback: check actual filesystem via git
+        files_changed = _detect_changed_files_via_git(worktree_path)
 
     outcome = FixOutcome.COMPLETED if files_changed else FixOutcome.FAILED_RETRYABLE
 
@@ -203,6 +227,7 @@ async def run_coder_tier3(
     elif response.text:
         data = _parse_json_response(response.text)
 
+    # Determine outcome — try 3 sources: parsed JSON, tool_uses, git diff
     files_changed = data.get("files_changed", [])
     if not files_changed:
         for tu in response.tool_uses:
@@ -210,6 +235,8 @@ async def run_coder_tier3(
                 fp = tu.input["file_path"]
                 if fp not in files_changed:
                     files_changed.append(fp)
+    if not files_changed:
+        files_changed = _detect_changed_files_via_git(worktree_path)
 
     outcome = FixOutcome.COMPLETED if files_changed else FixOutcome.FAILED_RETRYABLE
 
