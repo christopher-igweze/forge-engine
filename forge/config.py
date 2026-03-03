@@ -40,7 +40,7 @@ FORGE_DEFAULT_MODELS: dict[str, str] = {
     # Analysis agents — cheap
     "codebase_analyst_model": "minimax/minimax-m2.5",
     "quality_auditor_model": "minimax/minimax-m2.5",
-    "debt_tracker_model": "minimax/minimax-m2.5",
+    "debt_tracker_model": "anthropic/claude-haiku-4.5",
     # Reasoning agents — mid-tier
     "security_auditor_model": "anthropic/claude-haiku-4.5",
     "architecture_reviewer_model": "anthropic/claude-haiku-4.5",

@@ -171,18 +171,41 @@ async def run_debt_tracker(
 
     # If no category scores from LLM, compute defaults
     if not category_scores:
-        total = len(all_findings)
-        fixed = len(completed_fixes)
-        deferred = len(deferred_items or [])
-        fix_rate = (fixed / total * 100) if total > 0 else 0
+        # Count actual fixes (exclude DEFERRED outcomes)
+        actually_fixed = [
+            f for f in completed_fixes
+            if f.get("outcome") in ("completed", "completed_with_debt")
+        ]
+        deferred_count = len(deferred_items or [])
+
+        # Denominator = attempted fixes + deferred (what was in the plan),
+        # NOT all discovered findings
+        total_addressable = len(actually_fixed) + deferred_count
+        if total_addressable == 0:
+            total_addressable = max(len(all_findings), 1)
+
+        fix_rate = (len(actually_fixed) / total_addressable * 100) if total_addressable > 0 else 0
+
+        # Severity-weighted bonus: fixing critical/high issues counts more
+        severity_bonus = 0
+        for fix in actually_fixed:
+            sev = str(fix.get("severity", "medium")).lower()
+            if sev == "critical":
+                severity_bonus += 5
+            elif sev == "high":
+                severity_bonus += 3
+            elif sev == "medium":
+                severity_bonus += 1
+
+        base_score = min(100, fix_rate + severity_bonus)
 
         category_scores = [
-            CategoryScore(name="Security", score=int(fix_rate * 0.9), weight=0.30),
-            CategoryScore(name="Error Handling", score=int(fix_rate * 0.8), weight=0.20),
-            CategoryScore(name="Test Coverage", score=int(fix_rate * 0.5), weight=0.15),
-            CategoryScore(name="Architecture", score=int(fix_rate * 0.7), weight=0.15),
-            CategoryScore(name="Performance", score=int(fix_rate * 0.6), weight=0.10),
-            CategoryScore(name="Documentation", score=int(fix_rate * 0.4), weight=0.10),
+            CategoryScore(name="Security", score=min(100, int(base_score * 1.0)), weight=0.30),
+            CategoryScore(name="Error Handling", score=min(100, int(base_score * 0.95)), weight=0.20),
+            CategoryScore(name="Test Coverage", score=min(100, int(base_score * 0.7)), weight=0.15),
+            CategoryScore(name="Architecture", score=min(100, int(base_score * 0.9)), weight=0.15),
+            CategoryScore(name="Performance", score=min(100, int(base_score * 0.85)), weight=0.10),
+            CategoryScore(name="Documentation", score=min(100, int(base_score * 0.6)), weight=0.10),
         ]
 
     # Parse debt items

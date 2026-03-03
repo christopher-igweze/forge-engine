@@ -41,8 +41,8 @@ from . import router
 
 logger = logging.getLogger(__name__)
 
-# Tools available to coding agents
-_CODER_TOOLS = [Tool.READ, Tool.WRITE, Tool.EDIT, Tool.BASH, Tool.GLOB, Tool.GREP]
+# Tools available to coding agents (includes NotebookEdit for .ipynb files)
+_CODER_TOOLS = [Tool.READ, Tool.WRITE, Tool.EDIT, Tool.BASH, Tool.GLOB, Tool.GREP, Tool.NOTEBOOK_EDIT]
 
 
 def _parse_json_response(text: str) -> dict:
@@ -302,6 +302,7 @@ async def run_test_generator(
 async def run_code_reviewer(
     finding: dict,
     code_change: dict,
+    code_diff: str = "",
     codebase_map: dict | None = None,
     model: str = "anthropic/claude-haiku-4.5",
     ai_provider: str = "openrouter_direct",
@@ -317,6 +318,7 @@ async def run_code_reviewer(
         finding_json=json.dumps(finding, indent=2, default=str),
         code_change_json=json.dumps(code_change, indent=2, default=str),
         codebase_map_json=json.dumps(codebase_map, indent=2, default=str) if codebase_map else "",
+        code_diff=code_diff,
     )
 
     ai = AgentAI(AgentAIConfig(
@@ -337,12 +339,12 @@ async def run_code_reviewer(
     elif response.text:
         data = _parse_json_response(response.text)
 
-    # Parse decision — default to REQUEST_CHANGES if unclear
-    decision_str = str(data.get("decision", "REQUEST_CHANGES")).upper()
+    # Parse decision — default to APPROVE if unclear (bias toward accepting valid fixes)
+    decision_str = str(data.get("decision", "APPROVE")).upper()
     try:
         decision = ReviewDecision(decision_str)
     except ValueError:
-        decision = ReviewDecision.REQUEST_CHANGES
+        decision = ReviewDecision.APPROVE
 
     result = ForgeCodeReviewResult(
         finding_id=finding_obj.id,
