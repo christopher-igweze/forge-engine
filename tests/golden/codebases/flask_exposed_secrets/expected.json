@@ -1,0 +1,32 @@
+{
+  "test_id": "flask-exposed-secrets",
+  "description": "Flask app with hardcoded secrets, debug mode, and missing session security",
+  "expected_findings": [
+    {
+      "title": "Hardcoded secret key",
+      "category": "SECURITY",
+      "severity": "CRITICAL"
+    },
+    {
+      "title": "Debug mode enabled in production",
+      "category": "SECURITY",
+      "severity": "HIGH"
+    },
+    {
+      "title": "Missing session cookie security flags",
+      "category": "SECURITY",
+      "severity": "MEDIUM"
+    },
+    {
+      "title": "No input validation on login endpoint",
+      "category": "QUALITY",
+      "severity": "MEDIUM"
+    },
+    {
+      "title": "Server bound to 0.0.0.0 with debug enabled",
+      "category": "SECURITY",
+      "severity": "HIGH"
+    }
+  ],
+  "expected_score_range": [20, 45]
+}

@@ -1,0 +1,22 @@
+{
+  "test_id": "react-app-noerror",
+  "description": "React app missing error boundaries and proper error handling",
+  "expected_findings": [
+    {
+      "title": "Missing React ErrorBoundary component",
+      "category": "QUALITY",
+      "severity": "MEDIUM"
+    },
+    {
+      "title": "No error handling in API utility functions",
+      "category": "QUALITY",
+      "severity": "MEDIUM"
+    },
+    {
+      "title": "Direct API URL hardcoded instead of environment variable",
+      "category": "QUALITY",
+      "severity": "LOW"
+    }
+  ],
+  "expected_score_range": [55, 80]
+}

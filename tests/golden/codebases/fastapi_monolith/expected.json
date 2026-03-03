@@ -1,0 +1,42 @@
+{
+  "test_id": "fastapi-monolith",
+  "description": "FastAPI god module with no auth, no validation, no service layer",
+  "expected_findings": [
+    {
+      "title": "Unauthenticated admin endpoints",
+      "category": "SECURITY",
+      "severity": "CRITICAL"
+    },
+    {
+      "title": "No input validation on user creation",
+      "category": "QUALITY",
+      "severity": "MEDIUM"
+    },
+    {
+      "title": "No input validation on product creation",
+      "category": "QUALITY",
+      "severity": "MEDIUM"
+    },
+    {
+      "title": "God module — all routes and models in single file",
+      "category": "ARCHITECTURE",
+      "severity": "HIGH"
+    },
+    {
+      "title": "No rate limiting on API endpoints",
+      "category": "SECURITY",
+      "severity": "MEDIUM"
+    },
+    {
+      "title": "Database sessions not properly managed (no context manager)",
+      "category": "QUALITY",
+      "severity": "MEDIUM"
+    },
+    {
+      "title": "Circular import at module bottom",
+      "category": "ARCHITECTURE",
+      "severity": "LOW"
+    }
+  ],
+  "expected_score_range": [25, 50]
+}

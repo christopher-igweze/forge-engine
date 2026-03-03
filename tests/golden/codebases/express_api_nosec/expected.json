@@ -1,0 +1,42 @@
+{
+  "test_id": "express-api-nosec",
+  "description": "Express API with hardcoded secrets, SQL injection, and error exposure",
+  "expected_findings": [
+    {
+      "title": "Hardcoded API key in config.js",
+      "category": "SECURITY",
+      "severity": "CRITICAL"
+    },
+    {
+      "title": "Hardcoded database password in config.js",
+      "category": "SECURITY",
+      "severity": "CRITICAL"
+    },
+    {
+      "title": "Hardcoded JWT secret in config.js",
+      "category": "SECURITY",
+      "severity": "CRITICAL"
+    },
+    {
+      "title": "SQL injection via string concatenation in users route",
+      "category": "SECURITY",
+      "severity": "CRITICAL"
+    },
+    {
+      "title": "Internal error details exposed in HTTP response",
+      "category": "SECURITY",
+      "severity": "HIGH"
+    },
+    {
+      "title": "No input validation on user creation endpoint",
+      "category": "QUALITY",
+      "severity": "MEDIUM"
+    },
+    {
+      "title": "Plaintext password storage",
+      "category": "SECURITY",
+      "severity": "HIGH"
+    }
+  ],
+  "expected_score_range": [15, 40]
+}
