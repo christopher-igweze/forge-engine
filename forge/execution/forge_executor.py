@@ -408,6 +408,11 @@ async def execute_remediation(
         logger.info("Remediation: no items in plan")
         return
 
+    # Install project dependencies once before creating worktrees.
+    # Worktrees symlink node_modules/etc. from the main repo.
+    from forge.execution.worktree import install_project_deps
+    install_project_deps(state.repo_path)
+
     # Build finding lookup
     finding_map: dict[str, AuditFinding] = {f.id: f for f in state.all_findings}
 

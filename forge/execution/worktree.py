@@ -117,7 +117,80 @@ def create_worktree(
             logger.error("Failed to create worktree for %s: %s", finding_id, e2.stderr)
             raise
 
+    # Symlink node_modules from main repo if available (avoids re-install per worktree)
+    main_nm = os.path.join(repo_path, "node_modules")
+    wt_nm = os.path.join(worktree_dir, "node_modules")
+    if os.path.isdir(main_nm) and not os.path.exists(wt_nm):
+        try:
+            os.symlink(main_nm, wt_nm)
+            logger.debug("Symlinked node_modules into worktree: %s", worktree_dir)
+        except OSError as e:
+            logger.warning("Could not symlink node_modules: %s", e)
+
     return worktree_dir
+
+
+def install_project_deps(repo_path: str, timeout: int = 120) -> bool:
+    """Install project dependencies in the main repo before remediation.
+
+    Detects the project type from manifest files and runs the appropriate
+    install command. Called once before worktrees are created so that
+    symlinks can share the installed dependencies.
+
+    Returns True if deps were installed (or none needed), False on failure.
+    """
+    pkg_json = os.path.join(repo_path, "package.json")
+    req_txt = os.path.join(repo_path, "requirements.txt")
+    pyproject = os.path.join(repo_path, "pyproject.toml")
+
+    installed = False
+
+    # Node.js
+    if os.path.isfile(pkg_json) and not os.path.isdir(os.path.join(repo_path, "node_modules")):
+        logger.info("Installing Node.js dependencies in %s", repo_path)
+        try:
+            result = subprocess.run(
+                ["npm", "install", "--prefer-offline", "--no-audit", "--no-fund"],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            if result.returncode == 0:
+                logger.info("npm install succeeded")
+                installed = True
+            else:
+                logger.warning("npm install failed: %s", result.stderr[:500])
+        except FileNotFoundError:
+            logger.warning("npm not found — skipping dependency install")
+        except subprocess.TimeoutExpired:
+            logger.warning("npm install timed out after %ds", timeout)
+
+    # Python
+    if os.path.isfile(req_txt) and not os.path.isdir(os.path.join(repo_path, ".venv")):
+        logger.info("Installing Python dependencies in %s", repo_path)
+        try:
+            subprocess.run(
+                ["python3", "-m", "venv", ".venv"],
+                cwd=repo_path, capture_output=True, text=True, timeout=30,
+            )
+            pip = os.path.join(repo_path, ".venv", "bin", "pip")
+            result = subprocess.run(
+                [pip, "install", "-r", "requirements.txt"],
+                cwd=repo_path, capture_output=True, text=True, timeout=timeout,
+            )
+            if result.returncode == 0:
+                logger.info("pip install succeeded")
+                installed = True
+            else:
+                logger.warning("pip install failed: %s", result.stderr[:500])
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            logger.warning("Python dep install failed: %s", e)
+
+    if not installed and not os.path.isfile(pkg_json) and not os.path.isfile(req_txt):
+        logger.debug("No dependency manifest found — nothing to install")
+
+    return True
 
 
 def merge_worktree(
