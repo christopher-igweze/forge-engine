@@ -491,6 +491,29 @@ class ProductionReadinessReport(BaseModel):
         return normalized
 
 
+# ── Convergence Loop ────────────────────────────────────────────────
+
+
+class ConvergenceIterationRecord(BaseModel):
+    """Record of a single convergence loop iteration."""
+    iteration: int
+    score_before: int = 0
+    score_after: int = 0
+    findings_total: int = 0
+    findings_new: int = 0
+    findings_fixed: int = 0
+    findings_deferred: int = 0
+    low_categories: list[str] = Field(default_factory=list)
+
+
+class ConvergenceResult(BaseModel):
+    """Output of the convergence loop."""
+    converged: bool = False
+    final_score: int = 0
+    iterations_run: int = 0
+    iteration_records: list[ConvergenceIterationRecord] = Field(default_factory=list)
+
+
 # ── Control Loop State ────────────────────────────────────────────────
 
 
@@ -566,6 +589,12 @@ class ForgeExecutionState(BaseModel):
     estimated_cost_usd: float = 0.0
     success: bool = False
 
+    # Convergence state
+    convergence_iteration: int = 0
+    convergence_records: list[ConvergenceIterationRecord] = Field(default_factory=list)
+    prior_iteration_findings: list[AuditFinding] = Field(default_factory=list)
+    files_changed_this_run: list[str] = Field(default_factory=list)
+
 
 class ForgeResult(BaseModel):
     """Final output of a FORGE run."""
@@ -583,3 +612,4 @@ class ForgeResult(BaseModel):
     agent_invocations: int = 0
     cost_usd: float = 0.0
     duration_seconds: float = 0.0
+    convergence_iterations: int = 0

@@ -128,6 +128,13 @@ class ForgeConfig(BaseModel):
     # ── Project Context ───────────────────────────────────────────
     project_context: dict = {}  # User-provided project context for scan personalization
 
+    # ── Convergence Loop ─────────────────────────────────────────────
+    convergence_enabled: bool = True
+    convergence_target_score: int = 95
+    max_convergence_iterations: int = 3
+    convergence_min_improvement: int = 5  # stop if score improves < 5 pts
+    convergence_escalate_dropped: bool = True  # re-inject dropped findings
+
     def resolved_models(self) -> dict[str, str]:
         """Resolve model fields using the standard cascade.
 
