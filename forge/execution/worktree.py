@@ -158,21 +158,43 @@ def merge_worktree(
             cwd=worktree_path, check=False,
         )
 
+    # Ensure the main repo working tree is clean before merge.
+    # A prior failed merge or abort can leave dirty state that blocks checkout.
+    _run_git(["checkout", "."], cwd=repo_path, check=False)
+    _run_git(["clean", "-fd"], cwd=repo_path, check=False)
+
     # Merge the worktree branch into the target branch (from main repo)
     try:
         _run_git(["checkout", target_branch], cwd=repo_path)
+
+        merge_msg = f"forge: merge {branch}"
         result = _run_git(
-            ["merge", "--no-ff", branch, "-m", f"forge: merge {branch}"],
+            ["merge", "--no-ff", branch, "-m", merge_msg],
             cwd=repo_path, check=False,
         )
-        if result.returncode != 0:
-            logger.error("Merge conflict for %s: %s", branch, result.stderr)
-            # Abort the merge
-            _run_git(["merge", "--abort"], cwd=repo_path, check=False)
-            return False
 
-        logger.info("Merged %s into %s", branch, target_branch)
-        return True
+        if result.returncode == 0:
+            logger.info("Merged %s into %s", branch, target_branch)
+            return True
+
+        # Merge had conflicts — try auto-resolving in favor of the coder's changes.
+        # -X theirs keeps non-conflicting changes from both sides but resolves
+        # conflicting hunks using the incoming (coder's) branch.
+        logger.warning("Merge conflict for %s, retrying with -X theirs", branch)
+        _run_git(["merge", "--abort"], cwd=repo_path, check=False)
+
+        result = _run_git(
+            ["merge", "--no-ff", "-X", "theirs", branch, "-m", merge_msg],
+            cwd=repo_path, check=False,
+        )
+        if result.returncode == 0:
+            logger.info("Auto-resolved merge for %s into %s", branch, target_branch)
+            return True
+
+        logger.error("Merge conflict for %s (even with -X theirs): %s",
+                      branch, result.stderr)
+        _run_git(["merge", "--abort"], cwd=repo_path, check=False)
+        return False
 
     except subprocess.CalledProcessError as e:
         logger.error("Merge failed for %s: %s", branch, e.stderr)
