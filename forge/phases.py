@@ -336,6 +336,7 @@ async def _run_triage(
     cfg: ForgeConfig,
     resolved_models: dict[str, str],
     tier1_findings: list[dict] | None = None,
+    convergence_context: str = "",
 ) -> dict:
     """Run Triage phase: Agents 5-6.
 
@@ -405,6 +406,7 @@ async def _run_triage(
         artifacts_dir=state.artifacts_dir,
         model=resolved_models.get("fix_strategist_model", "anthropic/claude-haiku-4.5"),
         ai_provider=cfg.provider_for_role("fix_strategist"),
+        convergence_context=convergence_context,
     )
     if isinstance(plan_dict, dict):
         state.remediation_plan = RemediationPlan(**plan_dict)
