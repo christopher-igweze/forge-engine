@@ -171,6 +171,27 @@ async def run_inner_loop(
                 except OSError as e:
                     logger.warning("Failed to write test file %s: %s", test_path, e)
 
+        # ── Step 2b: Execute tests as quality gate ─────────────────────
+        if loop_state.test_result and loop_state.test_result.test_file_contents:
+            try:
+                from forge.execution.test_runner import run_tests_in_worktree
+                test_exec = run_tests_in_worktree(
+                    worktree_path,
+                    test_files=[tfc.path for tfc in loop_state.test_result.test_file_contents],
+                    timeout=120,
+                )
+                if test_exec and not test_exec.success:
+                    logger.info(
+                        "Tests failed (%d/%d passed) for %s: %s",
+                        test_exec.tests_passed, test_exec.tests_run,
+                        finding.title, test_exec.error_output[:200],
+                    )
+            except Exception as e:
+                logger.warning("Test execution failed (non-fatal): %s", e)
+                test_exec = None
+        else:
+            test_exec = None
+
         # Parse review result
         if isinstance(review_raw, Exception):
             logger.error("Code reviewer failed: %s", review_raw)
@@ -183,6 +204,17 @@ async def run_inner_loop(
             loop_state.review_result = ForgeCodeReviewResult(**_unwrap(review_raw))
 
         # ── Step 3: Decision ───────────────────────────────────────────
+        # Override APPROVE → REQUEST_CHANGES if tests fail
+        if test_exec and not test_exec.success:
+            if loop_state.review_result.decision == ReviewDecision.APPROVE:
+                loop_state.review_result.decision = ReviewDecision.REQUEST_CHANGES
+                loop_state.review_result.summary = (
+                    f"Code review passed but tests failed "
+                    f"({test_exec.tests_failed}/{test_exec.tests_run}): "
+                    f"{test_exec.error_output[:300]}"
+                )
+                logger.info("Inner loop: overriding APPROVE → REQUEST_CHANGES due to test failures")
+
         if loop_state.review_result.decision == ReviewDecision.APPROVE:
             coder_result.outcome = FixOutcome.COMPLETED
             loop_state.coder_result = coder_result
