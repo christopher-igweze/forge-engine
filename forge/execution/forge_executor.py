@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import TYPE_CHECKING
 
 try:
@@ -23,6 +24,7 @@ try:
 except ImportError:
     from typing import Any as Agent  # Standalone: accepts StandaloneDispatcher
 
+from forge.execution.context_broker import ForgeContextBroker
 from forge.execution.json_utils import safe_parse_agent_response
 from forge.schemas import (
     AuditFinding,
@@ -45,6 +47,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Max concurrent remediation fix executions (limits parallel opencode subprocesses)
+_FIX_CONCURRENCY_LIMIT = asyncio.Semaphore(4)
+
 
 # ── Inner Loop: Coder → Review → Retry ───────────────────────────────
 
@@ -58,6 +63,7 @@ async def run_inner_loop(
     codebase_map: dict | None,
     cfg: ForgeConfig,
     resolved_models: dict[str, str],
+    prior_changes: str = "",
 ) -> InnerLoopState:
     """Execute the inner control loop for a single finding.
 
@@ -95,6 +101,7 @@ async def run_inner_loop(
             worktree_path=worktree_path,
             codebase_map=codebase_map,
             review_feedback=review_feedback,
+            prior_changes=prior_changes,
             iteration=iteration,
             model=coder_model,
             ai_provider=cfg.provider_for_role(
@@ -109,11 +116,24 @@ async def run_inner_loop(
             review_feedback = coder_result.error_message
             continue
 
+        # Capture actual diff for reviewer context
+        actual_diff = ""
+        try:
+            import subprocess
+            _diff_proc = subprocess.run(
+                ["git", "diff", "HEAD"],
+                cwd=worktree_path, capture_output=True, text=True, timeout=30,
+            )
+            actual_diff = _diff_proc.stdout[:10000] if _diff_proc.returncode == 0 else ""
+        except Exception:
+            pass  # Non-fatal: reviewer works without diff, just less context
+
         # ── Step 2: Test Generator + Code Reviewer (parallel) ──────────
         test_coro = app.call(
             f"{node_id}.run_test_generator",
             finding=finding_dict,
             code_change=coder_result.model_dump(),
+            code_diff=actual_diff,
             worktree_path=worktree_path,
             model=resolved_models.get("test_generator_model", "anthropic/claude-haiku-4.5"),
             ai_provider=cfg.provider_for_role("test_generator"),
@@ -122,6 +142,7 @@ async def run_inner_loop(
             f"{node_id}.run_code_reviewer",
             finding=finding_dict,
             code_change=coder_result.model_dump(),
+            code_diff=actual_diff,
             codebase_map=codebase_map,
             model=resolved_models.get("code_reviewer_model", "anthropic/claude-haiku-4.5"),
             ai_provider=cfg.provider_for_role("code_reviewer"),
@@ -138,6 +159,39 @@ async def run_inner_loop(
         else:
             loop_state.test_result = TestGeneratorResult(**_unwrap(test_raw))
 
+        # Write inline test files to the worktree
+        if loop_state.test_result and loop_state.test_result.test_file_contents:
+            for tfc in loop_state.test_result.test_file_contents:
+                test_path = os.path.join(worktree_path, tfc.path)
+                try:
+                    os.makedirs(os.path.dirname(test_path), exist_ok=True)
+                    with open(test_path, "w") as f:
+                        f.write(tfc.content)
+                    logger.debug("Wrote test file: %s", test_path)
+                except OSError as e:
+                    logger.warning("Failed to write test file %s: %s", test_path, e)
+
+        # ── Step 2b: Execute tests as quality gate ─────────────────────
+        if loop_state.test_result and loop_state.test_result.test_file_contents:
+            try:
+                from forge.execution.test_runner import run_tests_in_worktree
+                test_exec = run_tests_in_worktree(
+                    worktree_path,
+                    test_files=[tfc.path for tfc in loop_state.test_result.test_file_contents],
+                    timeout=120,
+                )
+                if test_exec and not test_exec.success:
+                    logger.info(
+                        "Tests failed (%d/%d passed) for %s: %s",
+                        test_exec.tests_passed, test_exec.tests_run,
+                        finding.title, test_exec.error_output[:200],
+                    )
+            except Exception as e:
+                logger.warning("Test execution failed (non-fatal): %s", e)
+                test_exec = None
+        else:
+            test_exec = None
+
         # Parse review result
         if isinstance(review_raw, Exception):
             logger.error("Code reviewer failed: %s", review_raw)
@@ -150,6 +204,17 @@ async def run_inner_loop(
             loop_state.review_result = ForgeCodeReviewResult(**_unwrap(review_raw))
 
         # ── Step 3: Decision ───────────────────────────────────────────
+        # Override APPROVE → REQUEST_CHANGES if tests fail
+        if test_exec and not test_exec.success:
+            if loop_state.review_result.decision == ReviewDecision.APPROVE:
+                loop_state.review_result.decision = ReviewDecision.REQUEST_CHANGES
+                loop_state.review_result.summary = (
+                    f"Code review passed but tests failed "
+                    f"({test_exec.tests_failed}/{test_exec.tests_run}): "
+                    f"{test_exec.error_output[:300]}"
+                )
+                logger.info("Inner loop: overriding APPROVE → REQUEST_CHANGES due to test failures")
+
         if loop_state.review_result.decision == ReviewDecision.APPROVE:
             coder_result.outcome = FixOutcome.COMPLETED
             loop_state.coder_result = coder_result
@@ -395,6 +460,14 @@ async def execute_remediation(
         logger.info("Remediation: no items in plan")
         return
 
+    # Install project dependencies once before creating worktrees.
+    # Worktrees symlink node_modules/etc. from the main repo.
+    from forge.execution.worktree import install_project_deps
+    install_project_deps(state.repo_path)
+
+    # Create shared context broker for cross-agent coordination
+    broker = ForgeContextBroker()
+
     # Build finding lookup
     finding_map: dict[str, AuditFinding] = {f.id: f for f in state.all_findings}
 
@@ -424,8 +497,8 @@ async def execute_remediation(
             if item.tier in (RemediationTier.TIER_0, RemediationTier.TIER_1):
                 continue
 
-            tasks.append(_execute_single_fix(
-                app, node_id, item, finding, state, cfg, resolved_models,
+            tasks.append(_execute_single_fix_throttled(
+                app, node_id, item, finding, state, cfg, resolved_models, broker,
             ))
 
         if tasks:
@@ -440,6 +513,23 @@ async def execute_remediation(
         await execute_remediation(app, node_id, state, cfg, resolved_models)
 
 
+async def _execute_single_fix_throttled(
+    app: Agent,
+    node_id: str,
+    item: RemediationItem,
+    finding: AuditFinding,
+    state: ForgeExecutionState,
+    cfg: ForgeConfig,
+    resolved_models: dict[str, str],
+    broker: ForgeContextBroker | None = None,
+) -> None:
+    """Throttled wrapper that limits concurrent fix executions."""
+    async with _FIX_CONCURRENCY_LIMIT:
+        return await _execute_single_fix(
+            app, node_id, item, finding, state, cfg, resolved_models, broker,
+        )
+
+
 async def _execute_single_fix(
     app: Agent,
     node_id: str,
@@ -448,6 +538,7 @@ async def _execute_single_fix(
     state: ForgeExecutionState,
     cfg: ForgeConfig,
     resolved_models: dict[str, str],
+    broker: ForgeContextBroker | None = None,
 ) -> None:
     """Execute a single fix through inner + middle loops.
 
@@ -463,6 +554,17 @@ async def _execute_single_fix(
 
     codebase_map = state.codebase_map.model_dump() if state.codebase_map else None
 
+    # Skip .ipynb files — notebook remediation not yet supported
+    if finding.locations and all(
+        loc.file_path.endswith(".ipynb") for loc in finding.locations
+    ):
+        logger.info(
+            "Skipping %s — .ipynb remediation not supported", finding.title,
+        )
+        # Track as deferred — do NOT append to completed_fixes
+        state.outer_loop.deferred_findings.append(finding.id)
+        return
+
     # Create isolated worktree for this fix
     try:
         worktree_path = create_worktree(
@@ -475,9 +577,19 @@ async def _execute_single_fix(
         worktree_path = state.repo_path  # Fallback to main repo
 
     try:
+        # Claim files in the shared context broker
+        prior_changes = ""
+        if broker:
+            claimed_files = [loc.file_path for loc in finding.locations] if finding.locations else []
+            conflicts = await broker.claim_files(finding.id, claimed_files)
+            if conflicts:
+                logger.info("Fix %s: file conflicts with other fixes: %s", finding.id, conflicts)
+            prior_changes = await broker.get_prior_changes_context(finding.id)
+
         # ── Inner loop ─────────────────────────────────────────────────
         inner_state = await run_inner_loop(
             app, node_id, item, finding, worktree_path, codebase_map, cfg, resolved_models,
+            prior_changes=prior_changes,
         )
         state.inner_loop_states[finding.id] = inner_state
         state.total_agent_invocations += inner_state.iteration * 3  # coder + test + review per iter
@@ -491,7 +603,21 @@ async def _execute_single_fix(
                     worktree_path,
                     target_branch=get_current_branch(state.repo_path),
                 )
-                if not merged:
+                if merged:
+                    # Record completion in shared context
+                    if broker:
+                        import subprocess as sp
+                        try:
+                            merge_diff = sp.run(
+                                ["git", "log", "-1", "--format=", "-p"],
+                                cwd=state.repo_path, capture_output=True, text=True, timeout=10,
+                            ).stdout[:5000]
+                        except Exception:
+                            merge_diff = ""
+                        await broker.record_completion(
+                            finding.id, merge_diff, inner_state.coder_result.summary if inner_state.coder_result else ""
+                        )
+                else:
                     logger.warning("Merge failed for %s — marking as debt", finding.id)
                     inner_state.coder_result.outcome = FixOutcome.COMPLETED_WITH_DEBT
             state.completed_fixes.append(inner_state.coder_result)
@@ -505,15 +631,16 @@ async def _execute_single_fix(
 
         if escalation.action == EscalationAction.DEFER:
             state.outer_loop.deferred_findings.append(finding.id)
-            if inner_state.coder_result:
-                inner_state.coder_result.outcome = FixOutcome.DEFERRED
-                state.completed_fixes.append(inner_state.coder_result)
+            # Do NOT append to completed_fixes — deferred items tracked separately
+            if broker:
+                await broker.record_failure(finding.id, "deferred")
 
         elif escalation.action == EscalationAction.RECLASSIFY and escalation.new_tier:
             # Promote to higher tier and retry
             item.tier = escalation.new_tier
             new_inner = await run_inner_loop(
                 app, node_id, item, finding, worktree_path, codebase_map, cfg, resolved_models,
+                prior_changes=prior_changes,
             )
             state.inner_loop_states[finding.id] = new_inner
 
@@ -535,6 +662,10 @@ async def _execute_single_fix(
             pass
 
     finally:
+        # Release file claims as safety net
+        if broker:
+            await broker.release_files(finding.id)
+
         # Clean up worktree (unless it was the fallback)
         if worktree_path != state.repo_path:
             try:

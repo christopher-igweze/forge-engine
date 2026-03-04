@@ -336,6 +336,7 @@ async def _run_triage(
     cfg: ForgeConfig,
     resolved_models: dict[str, str],
     tier1_findings: list[dict] | None = None,
+    convergence_context: str = "",
 ) -> dict:
     """Run Triage phase: Agents 5-6.
 
@@ -405,10 +406,57 @@ async def _run_triage(
         artifacts_dir=state.artifacts_dir,
         model=resolved_models.get("fix_strategist_model", "anthropic/claude-haiku-4.5"),
         ai_provider=cfg.provider_for_role("fix_strategist"),
+        convergence_context=convergence_context,
     )
     if isinstance(plan_dict, dict):
         state.remediation_plan = RemediationPlan(**plan_dict)
     invocations += 1
+
+    # Log strategist dropout
+    if state.remediation_plan and state.remediation_plan.items:
+        planned_ids = {item.finding_id for item in state.remediation_plan.items}
+        all_ids = {f.id for f in state.all_findings}
+        dropped = all_ids - planned_ids
+        if dropped:
+            logger.warning(
+                "Fix Strategist dropped %d/%d findings from plan: %s",
+                len(dropped), len(all_ids),
+                ", ".join(list(dropped)[:5]) + ("..." if len(dropped) > 5 else ""),
+            )
+
+    # Safety net: ensure all Tier 2/3 findings have plan items
+    if state.triage_result and state.remediation_plan:
+        from forge.schemas import RemediationItem, RemediationTier
+        tier_map = {}
+        for d in state.triage_result.decisions:
+            tier_map[d.finding_id] = d.tier
+        planned_ids = {item.finding_id for item in state.remediation_plan.items}
+
+        added = 0
+        for finding in state.all_findings:
+            if finding.id not in planned_ids:
+                tier = tier_map.get(finding.id, RemediationTier.TIER_2)
+                if tier in (RemediationTier.TIER_2, RemediationTier.TIER_3):
+                    state.remediation_plan.items.append(RemediationItem(
+                        finding_id=finding.id,
+                        title=finding.title,
+                        tier=tier,
+                        priority=99,  # Low priority — strategist didn't include it
+                        estimated_files=1,
+                    ))
+                    # Add to last execution level
+                    if state.remediation_plan.execution_levels:
+                        state.remediation_plan.execution_levels[-1].append(finding.id)
+                    else:
+                        state.remediation_plan.execution_levels.append([finding.id])
+                    added += 1
+
+        if added:
+            state.remediation_plan.total_items = len(state.remediation_plan.items)
+            logger.info(
+                "Safety net: added %d dropped Tier 2/3 findings back to plan (total: %d)",
+                added, state.remediation_plan.total_items,
+            )
 
     # Write tier assignments back to the finding objects so reports show them
     if state.triage_result and state.triage_result.decisions:
@@ -511,7 +559,7 @@ async def _run_validation(
             f"{NODE_ID}.run_integration_validator",
             repo_path=state.repo_path,
             all_findings=all_findings_json,
-            all_fixes=all_fixes_json,
+            completed_fixes=all_fixes_json,
             artifacts_dir=state.artifacts_dir,
             model=resolved_models.get("integration_validator_model", "anthropic/claude-haiku-4.5"),
             ai_provider=cfg.provider_for_role("integration_validator"),

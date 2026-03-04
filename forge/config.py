@@ -40,7 +40,7 @@ FORGE_DEFAULT_MODELS: dict[str, str] = {
     # Analysis agents — cheap
     "codebase_analyst_model": "minimax/minimax-m2.5",
     "quality_auditor_model": "minimax/minimax-m2.5",
-    "debt_tracker_model": "minimax/minimax-m2.5",
+    "debt_tracker_model": "anthropic/claude-haiku-4.5",
     # Reasoning agents — mid-tier
     "security_auditor_model": "anthropic/claude-haiku-4.5",
     "architecture_reviewer_model": "anthropic/claude-haiku-4.5",
@@ -73,7 +73,7 @@ ROLE_TO_PROVIDER: dict[str, str] = {
     "triage_classifier": "openrouter_direct",
     "coder_tier2": "opencode",
     "coder_tier3": "opencode",
-    "test_generator": "opencode",
+    "test_generator": "openrouter_direct",
     "code_reviewer": "openrouter_direct",
     "integration_validator": "opencode",
     "debt_tracker": "openrouter_direct",
@@ -127,6 +127,13 @@ class ForgeConfig(BaseModel):
 
     # ── Project Context ───────────────────────────────────────────
     project_context: dict = {}  # User-provided project context for scan personalization
+
+    # ── Convergence Loop ─────────────────────────────────────────────
+    convergence_enabled: bool = True
+    convergence_target_score: int = 95
+    max_convergence_iterations: int = 3
+    convergence_min_improvement: int = 5  # stop if score improves < 5 pts
+    convergence_escalate_dropped: bool = True  # re-inject dropped findings
 
     def resolved_models(self) -> dict[str, str]:
         """Resolve model fields using the standard cascade.

@@ -81,6 +81,7 @@ def fix_strategist_task_prompt(
     all_findings_json: str,
     codebase_map_json: str,
     repo_url: str = "",
+    convergence_context: str = "",
 ) -> str:
     """Build the task prompt for the Fix Strategist.
 
@@ -107,5 +108,14 @@ def fix_strategist_task_prompt(
         "fixes into parallel execution levels. Defer any findings "
         "that are too risky or low-value to fix."
     )
+
+    if convergence_context:
+        parts.append(f"\n\n{convergence_context}")
+        parts.append(
+            "\n\nIMPORTANT: This is a subsequent iteration. You MUST address "
+            "ALL findings marked as must_fix. Do NOT drop or defer findings "
+            "that were deferred in the previous iteration. The goal is to reach "
+            "the target score. Focus especially on the low-scoring categories."
+        )
 
     return "\n".join(parts)

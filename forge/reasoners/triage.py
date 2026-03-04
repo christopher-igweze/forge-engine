@@ -248,6 +248,7 @@ async def run_fix_strategist(
     artifacts_dir: str = "",
     model: str = "anthropic/claude-haiku-4.5",
     ai_provider: str = "openrouter_direct",
+    convergence_context: str = "",
 ) -> dict:
     """Agent 5: Create a prioritized remediation plan.
 
@@ -274,6 +275,7 @@ async def run_fix_strategist(
     task = fix_strategist_task_prompt(
         all_findings_json=all_findings_json,
         codebase_map_json=codebase_map_json,
+        convergence_context=convergence_context,
     )
 
     ai = AgentAI(AgentAIConfig(
