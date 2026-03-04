@@ -162,25 +162,37 @@ async def remediate(
             state.total_agent_invocations += triage_result["invocations"]
             save_checkpoint(state.repo_path, CheckpointPhase.TRIAGE, state)
 
-        # ── Step 3: Remediation (Agents 7-10) ────────────────────────
+        # ── Step 3+4: Remediation + Validation (convergence or single-pass) ──
         if cfg.mode in (ForgeMode.FULL, ForgeMode.REMEDIATION) and not cfg.dry_run:
             if resume_phase not in (
                 CheckpointPhase.REMEDIATION, CheckpointPhase.VALIDATION,
             ):
-                remediation_result = await _run_remediation(
-                    app, state, cfg, resolved,
-                )
-                state.total_agent_invocations += remediation_result["invocations"]
-                save_checkpoint(state.repo_path, CheckpointPhase.REMEDIATION, state)
+                if cfg.convergence_enabled:
+                    from forge.execution.convergence import run_convergence_loop
+                    conv_result = await run_convergence_loop(
+                        app, state, cfg, resolved, tier1_findings,
+                    )
+                    logger.info(
+                        "Convergence: %s after %d iterations (score=%d)",
+                        "converged" if conv_result.converged else "stopped",
+                        conv_result.iterations_run, conv_result.final_score,
+                    )
+                else:
+                    remediation_result = await _run_remediation(
+                        app, state, cfg, resolved,
+                    )
+                    state.total_agent_invocations += remediation_result["invocations"]
+                    save_checkpoint(state.repo_path, CheckpointPhase.REMEDIATION, state)
 
-        # ── Step 4: Validation (Agents 11-12) ────────────────────────
+        # Validation (only if convergence disabled — loop handles its own)
         if cfg.mode in (ForgeMode.FULL, ForgeMode.VALIDATION) and not cfg.dry_run:
-            if resume_phase != CheckpointPhase.VALIDATION:
-                validation_result = await _run_validation(
-                    app, state, cfg, resolved,
-                )
-                state.total_agent_invocations += validation_result["invocations"]
-                save_checkpoint(state.repo_path, CheckpointPhase.VALIDATION, state)
+            if not cfg.convergence_enabled:
+                if resume_phase != CheckpointPhase.VALIDATION:
+                    validation_result = await _run_validation(
+                        app, state, cfg, resolved,
+                    )
+                    state.total_agent_invocations += validation_result["invocations"]
+                    save_checkpoint(state.repo_path, CheckpointPhase.VALIDATION, state)
 
         # Clear checkpoints on successful completion
         clear_checkpoints(state.repo_path)
@@ -270,6 +282,7 @@ async def remediate(
         agent_invocations=state.total_agent_invocations,
         cost_usd=state.estimated_cost_usd,
         duration_seconds=elapsed,
+        convergence_iterations=state.convergence_iteration + 1 if state.convergence_records else 0,
         readiness_report=state.readiness_report,
         discovery_report=discovery_report_data,
     )
