@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import TYPE_CHECKING
 
 try:
@@ -44,6 +45,9 @@ if TYPE_CHECKING:
     from forge.config import ForgeConfig
 
 logger = logging.getLogger(__name__)
+
+# Max concurrent remediation fix executions (limits parallel opencode subprocesses)
+_FIX_CONCURRENCY_LIMIT = asyncio.Semaphore(4)
 
 
 # ── Inner Loop: Coder → Review → Retry ───────────────────────────────
@@ -126,6 +130,7 @@ async def run_inner_loop(
             f"{node_id}.run_test_generator",
             finding=finding_dict,
             code_change=coder_result.model_dump(),
+            code_diff=actual_diff,
             worktree_path=worktree_path,
             model=resolved_models.get("test_generator_model", "anthropic/claude-haiku-4.5"),
             ai_provider=cfg.provider_for_role("test_generator"),
@@ -150,6 +155,18 @@ async def run_inner_loop(
             loop_state.test_result = TestGeneratorResult(finding_id=finding.id)
         else:
             loop_state.test_result = TestGeneratorResult(**_unwrap(test_raw))
+
+        # Write inline test files to the worktree
+        if loop_state.test_result and loop_state.test_result.test_file_contents:
+            for tfc in loop_state.test_result.test_file_contents:
+                test_path = os.path.join(worktree_path, tfc.path)
+                try:
+                    os.makedirs(os.path.dirname(test_path), exist_ok=True)
+                    with open(test_path, "w") as f:
+                        f.write(tfc.content)
+                    logger.debug("Wrote test file: %s", test_path)
+                except OSError as e:
+                    logger.warning("Failed to write test file %s: %s", test_path, e)
 
         # Parse review result
         if isinstance(review_raw, Exception):
@@ -442,7 +459,7 @@ async def execute_remediation(
             if item.tier in (RemediationTier.TIER_0, RemediationTier.TIER_1):
                 continue
 
-            tasks.append(_execute_single_fix(
+            tasks.append(_execute_single_fix_throttled(
                 app, node_id, item, finding, state, cfg, resolved_models,
             ))
 
@@ -456,6 +473,22 @@ async def execute_remediation(
         state.remediation_plan = new_plan
         # Re-execute with new plan (recursive, but max 1 replan)
         await execute_remediation(app, node_id, state, cfg, resolved_models)
+
+
+async def _execute_single_fix_throttled(
+    app: Agent,
+    node_id: str,
+    item: RemediationItem,
+    finding: AuditFinding,
+    state: ForgeExecutionState,
+    cfg: ForgeConfig,
+    resolved_models: dict[str, str],
+) -> None:
+    """Throttled wrapper that limits concurrent fix executions."""
+    async with _FIX_CONCURRENCY_LIMIT:
+        return await _execute_single_fix(
+            app, node_id, item, finding, state, cfg, resolved_models,
+        )
 
 
 async def _execute_single_fix(

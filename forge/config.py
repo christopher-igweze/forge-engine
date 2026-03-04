@@ -73,7 +73,7 @@ ROLE_TO_PROVIDER: dict[str, str] = {
     "triage_classifier": "openrouter_direct",
     "coder_tier2": "opencode",
     "coder_tier3": "opencode",
-    "test_generator": "opencode",
+    "test_generator": "openrouter_direct",
     "code_reviewer": "openrouter_direct",
     "integration_validator": "opencode",
     "debt_tracker": "openrouter_direct",

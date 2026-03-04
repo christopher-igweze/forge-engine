@@ -354,11 +354,18 @@ class CoderFixResult(BaseModel):
 # ── Agent 9: Test Generator ──────────────────────────────────────────
 
 
+class TestFileContent(BaseModel):
+    """A test file with its path and content, for inline generation."""
+    path: str
+    content: str
+
+
 class TestGeneratorResult(BaseModel):
     """Output of Agent 9: Test Generator."""
 
     finding_id: str
     test_files_created: list[str] = Field(default_factory=list)
+    test_file_contents: list[TestFileContent] = Field(default_factory=list)
     tests_written: int = 0
     tests_passing: int = 0
     coverage_summary: str = ""

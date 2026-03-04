@@ -35,6 +35,7 @@ from forge.schemas import (
     FixOutcome,
     ForgeCodeReviewResult,
     ReviewDecision,
+    TestFileContent,
     TestGeneratorResult,
 )
 
@@ -264,15 +265,16 @@ async def run_coder_tier3(
 async def run_test_generator(
     finding: dict,
     code_change: dict,
-    worktree_path: str,
+    code_diff: str = "",
+    worktree_path: str = ".",
     model: str = "anthropic/claude-haiku-4.5",
-    ai_provider: str = "opencode",
-    max_turns: int = 20,
+    ai_provider: str = "openrouter_direct",
+    max_turns: int = 1,
 ) -> dict:
     """Agent 9: Generate tests for a fix applied by the Coder agent.
 
-    Runs in the same worktree as the coder so it can read the changes
-    and existing test infrastructure.
+    Uses openrouter_direct (HTTP direct) for reliable structured JSON output.
+    Returns test file contents inline — caller writes them to disk.
     """
     finding_obj = AuditFinding(**finding)
     logger.info("Agent 9: Test Generator starting for %s", finding_obj.title)
@@ -280,7 +282,7 @@ async def run_test_generator(
     task = test_generator_task_prompt(
         finding_json=json.dumps(finding, indent=2, default=str),
         code_change_json=json.dumps(code_change, indent=2, default=str),
-        existing_tests="(Agent will discover existing tests via Glob/Read)",
+        code_diff=code_diff,
     )
 
     ai = AgentAI(AgentAIConfig(
@@ -288,37 +290,42 @@ async def run_test_generator(
         model=model,
         cwd=worktree_path,
         max_turns=max_turns,
-        allowed_tools=[t.value for t in _CODER_TOOLS],
+        allowed_tools=[],  # No file tools — returns test code inline
         env={"OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY", "")},
         agent_name="test_generator",
     ))
 
-    response = await ai.run(task, system_prompt=TEST_GEN_SYSTEM_PROMPT)
+    response = await ai.run(
+        task,
+        system_prompt=TEST_GEN_SYSTEM_PROMPT,
+        output_schema=TestGeneratorResult,
+    )
 
+    # Parse structured response
     data = {}
     if response.parsed:
         data = response.parsed.model_dump() if hasattr(response.parsed, "model_dump") else {}
     elif response.text:
         data = _parse_json_response(response.text)
 
-    test_files = data.get("test_files_created", [])
-    if not test_files:
-        for tu in response.tool_uses:
-            if tu.name in ("Write", "Edit") and "file_path" in tu.input:
-                fp = tu.input["file_path"]
-                if fp not in test_files:
-                    test_files.append(fp)
-
     result = TestGeneratorResult(
         finding_id=finding_obj.id,
-        test_files_created=test_files,
-        tests_written=data.get("tests_written", len(test_files)),
+        test_files_created=data.get("test_files_created", []),
+        test_file_contents=[
+            TestFileContent(**tfc) for tfc in data.get("test_file_contents", [])
+            if isinstance(tfc, dict) and "path" in tfc and "content" in tfc
+        ],
+        tests_written=data.get("tests_written", 0),
         tests_passing=data.get("tests_passing", 0),
         coverage_summary=data.get("coverage_summary", ""),
         summary=data.get("summary", ""),
     )
 
-    logger.info("Agent 9: Complete — %d test files for %s", len(test_files), finding_obj.title)
+    # Populate test_files_created from test_file_contents if not set
+    if not result.test_files_created and result.test_file_contents:
+        result.test_files_created = [tfc.path for tfc in result.test_file_contents]
+
+    logger.info("Agent 9: Complete — %d test files for %s", len(result.test_files_created), finding_obj.title)
     return result.model_dump()
 
 
