@@ -173,6 +173,7 @@ def coder_task_prompt(
     relevant_files: str,
     codebase_map_json: str = "",
     review_feedback: str = "",
+    prior_changes: str = "",
     iteration: int = 1,
 ) -> str:
     """Build the task prompt for the coder agent."""
@@ -185,6 +186,9 @@ def coder_task_prompt(
             "Address these specific issues before proceeding:\n\n"
             f"{review_feedback}\n"
         )
+
+    if prior_changes:
+        parts.append(f"\n## Prior Changes by Other Agents\n{prior_changes}")
 
     if codebase_map_json:
         parts.append(f"## Codebase Context\n{codebase_map_json}\n")

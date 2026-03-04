@@ -96,6 +96,7 @@ async def run_coder_tier2(
     worktree_path: str,
     codebase_map: dict | None = None,
     review_feedback: str = "",
+    prior_changes: str = "",
     iteration: int = 1,
     model: str = "anthropic/claude-sonnet-4.6",
     ai_provider: str = "opencode",
@@ -120,6 +121,7 @@ async def run_coder_tier2(
         relevant_files="(Agent will discover relevant files via Read/Glob tools)",
         codebase_map_json=codebase_map_json,
         review_feedback=review_feedback,
+        prior_changes=prior_changes,
         iteration=iteration,
     )
 
@@ -182,6 +184,7 @@ async def run_coder_tier3(
     worktree_path: str,
     codebase_map: dict | None = None,
     review_feedback: str = "",
+    prior_changes: str = "",
     iteration: int = 1,
     model: str = "anthropic/claude-sonnet-4.6",
     ai_provider: str = "opencode",
@@ -207,6 +210,7 @@ async def run_coder_tier3(
         relevant_files="(Agent will discover relevant files via Read/Glob tools)",
         codebase_map_json=codebase_map_json,
         review_feedback=review_feedback,
+        prior_changes=prior_changes,
         iteration=iteration,
     )
 

@@ -24,6 +24,7 @@ try:
 except ImportError:
     from typing import Any as Agent  # Standalone: accepts StandaloneDispatcher
 
+from forge.execution.context_broker import ForgeContextBroker
 from forge.execution.json_utils import safe_parse_agent_response
 from forge.schemas import (
     AuditFinding,
@@ -62,6 +63,7 @@ async def run_inner_loop(
     codebase_map: dict | None,
     cfg: ForgeConfig,
     resolved_models: dict[str, str],
+    prior_changes: str = "",
 ) -> InnerLoopState:
     """Execute the inner control loop for a single finding.
 
@@ -99,6 +101,7 @@ async def run_inner_loop(
             worktree_path=worktree_path,
             codebase_map=codebase_map,
             review_feedback=review_feedback,
+            prior_changes=prior_changes,
             iteration=iteration,
             model=coder_model,
             ai_provider=cfg.provider_for_role(
@@ -430,6 +433,9 @@ async def execute_remediation(
     from forge.execution.worktree import install_project_deps
     install_project_deps(state.repo_path)
 
+    # Create shared context broker for cross-agent coordination
+    broker = ForgeContextBroker()
+
     # Build finding lookup
     finding_map: dict[str, AuditFinding] = {f.id: f for f in state.all_findings}
 
@@ -460,7 +466,7 @@ async def execute_remediation(
                 continue
 
             tasks.append(_execute_single_fix_throttled(
-                app, node_id, item, finding, state, cfg, resolved_models,
+                app, node_id, item, finding, state, cfg, resolved_models, broker,
             ))
 
         if tasks:
@@ -483,11 +489,12 @@ async def _execute_single_fix_throttled(
     state: ForgeExecutionState,
     cfg: ForgeConfig,
     resolved_models: dict[str, str],
+    broker: ForgeContextBroker | None = None,
 ) -> None:
     """Throttled wrapper that limits concurrent fix executions."""
     async with _FIX_CONCURRENCY_LIMIT:
         return await _execute_single_fix(
-            app, node_id, item, finding, state, cfg, resolved_models,
+            app, node_id, item, finding, state, cfg, resolved_models, broker,
         )
 
 
@@ -499,6 +506,7 @@ async def _execute_single_fix(
     state: ForgeExecutionState,
     cfg: ForgeConfig,
     resolved_models: dict[str, str],
+    broker: ForgeContextBroker | None = None,
 ) -> None:
     """Execute a single fix through inner + middle loops.
 
@@ -537,9 +545,19 @@ async def _execute_single_fix(
         worktree_path = state.repo_path  # Fallback to main repo
 
     try:
+        # Claim files in the shared context broker
+        prior_changes = ""
+        if broker:
+            claimed_files = [loc.file_path for loc in finding.locations] if finding.locations else []
+            conflicts = await broker.claim_files(finding.id, claimed_files)
+            if conflicts:
+                logger.info("Fix %s: file conflicts with other fixes: %s", finding.id, conflicts)
+            prior_changes = await broker.get_prior_changes_context(finding.id)
+
         # ── Inner loop ─────────────────────────────────────────────────
         inner_state = await run_inner_loop(
             app, node_id, item, finding, worktree_path, codebase_map, cfg, resolved_models,
+            prior_changes=prior_changes,
         )
         state.inner_loop_states[finding.id] = inner_state
         state.total_agent_invocations += inner_state.iteration * 3  # coder + test + review per iter
@@ -553,7 +571,21 @@ async def _execute_single_fix(
                     worktree_path,
                     target_branch=get_current_branch(state.repo_path),
                 )
-                if not merged:
+                if merged:
+                    # Record completion in shared context
+                    if broker:
+                        import subprocess as sp
+                        try:
+                            merge_diff = sp.run(
+                                ["git", "log", "-1", "--format=", "-p"],
+                                cwd=state.repo_path, capture_output=True, text=True, timeout=10,
+                            ).stdout[:5000]
+                        except Exception:
+                            merge_diff = ""
+                        await broker.record_completion(
+                            finding.id, merge_diff, inner_state.coder_result.summary if inner_state.coder_result else ""
+                        )
+                else:
                     logger.warning("Merge failed for %s — marking as debt", finding.id)
                     inner_state.coder_result.outcome = FixOutcome.COMPLETED_WITH_DEBT
             state.completed_fixes.append(inner_state.coder_result)
@@ -568,12 +600,15 @@ async def _execute_single_fix(
         if escalation.action == EscalationAction.DEFER:
             state.outer_loop.deferred_findings.append(finding.id)
             # Do NOT append to completed_fixes — deferred items tracked separately
+            if broker:
+                await broker.record_failure(finding.id, "deferred")
 
         elif escalation.action == EscalationAction.RECLASSIFY and escalation.new_tier:
             # Promote to higher tier and retry
             item.tier = escalation.new_tier
             new_inner = await run_inner_loop(
                 app, node_id, item, finding, worktree_path, codebase_map, cfg, resolved_models,
+                prior_changes=prior_changes,
             )
             state.inner_loop_states[finding.id] = new_inner
 
@@ -595,6 +630,10 @@ async def _execute_single_fix(
             pass
 
     finally:
+        # Release file claims as safety net
+        if broker:
+            await broker.release_files(finding.id)
+
         # Clean up worktree (unless it was the fallback)
         if worktree_path != state.repo_path:
             try:
