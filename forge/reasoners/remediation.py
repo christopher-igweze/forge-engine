@@ -98,7 +98,7 @@ async def run_coder_tier2(
     review_feedback: str = "",
     prior_changes: str = "",
     iteration: int = 1,
-    model: str = "anthropic/claude-sonnet-4.6",
+    model: str = "minimax/minimax-m2.5",
     ai_provider: str = "opencode",
     max_turns: int = 30,
 ) -> dict:
@@ -147,10 +147,11 @@ async def run_coder_tier2(
     # Determine outcome — try 3 sources: parsed JSON, tool_uses, git diff
     files_changed = data.get("files_changed", [])
     if not files_changed:
+        _write_tool_names = {"Write", "Edit", "write_file", "edit_file"}
         for tu in response.tool_uses:
-            if tu.name in ("Write", "Edit") and "file_path" in tu.input:
-                fp = tu.input["file_path"]
-                if fp not in files_changed:
+            if tu.name in _write_tool_names:
+                fp = tu.input.get("file_path") or tu.input.get("path", "")
+                if fp and fp not in files_changed:
                     files_changed.append(fp)
     if not files_changed:
         # Authoritative fallback: check actual filesystem via git
@@ -186,7 +187,7 @@ async def run_coder_tier3(
     review_feedback: str = "",
     prior_changes: str = "",
     iteration: int = 1,
-    model: str = "anthropic/claude-sonnet-4.6",
+    model: str = "minimax/minimax-m2.5",
     ai_provider: str = "opencode",
     max_turns: int = 60,
 ) -> dict:
@@ -235,10 +236,11 @@ async def run_coder_tier3(
     # Determine outcome — try 3 sources: parsed JSON, tool_uses, git diff
     files_changed = data.get("files_changed", [])
     if not files_changed:
+        _write_tool_names = {"Write", "Edit", "write_file", "edit_file"}
         for tu in response.tool_uses:
-            if tu.name in ("Write", "Edit") and "file_path" in tu.input:
-                fp = tu.input["file_path"]
-                if fp not in files_changed:
+            if tu.name in _write_tool_names:
+                fp = tu.input.get("file_path") or tu.input.get("path", "")
+                if fp and fp not in files_changed:
                     files_changed.append(fp)
     if not files_changed:
         files_changed = _detect_changed_files_via_git(worktree_path)
@@ -271,7 +273,8 @@ async def run_test_generator(
     code_change: dict,
     code_diff: str = "",
     worktree_path: str = ".",
-    model: str = "anthropic/claude-haiku-4.5",
+    test_context: dict | None = None,
+    model: str = "minimax/minimax-m2.5",
     ai_provider: str = "openrouter_direct",
     max_turns: int = 1,
 ) -> dict:
@@ -283,10 +286,17 @@ async def run_test_generator(
     finding_obj = AuditFinding(**finding)
     logger.info("Agent 9: Test Generator starting for %s", finding_obj.title)
 
+    # Extract test context fields
+    tc = test_context or {}
+
     task = test_generator_task_prompt(
         finding_json=json.dumps(finding, indent=2, default=str),
         code_change_json=json.dumps(code_change, indent=2, default=str),
         code_diff=code_diff,
+        source_context=tc.get("source_files", {}),
+        existing_tests=tc.get("existing_test_sample", ""),
+        framework_hint=tc.get("framework", ""),
+        project_hints=tc.get("project_hints", ""),
     )
 
     ai = AgentAI(AgentAIConfig(
@@ -342,7 +352,7 @@ async def run_code_reviewer(
     code_change: dict,
     code_diff: str = "",
     codebase_map: dict | None = None,
-    model: str = "anthropic/claude-haiku-4.5",
+    model: str = "minimax/minimax-m2.5",
     ai_provider: str = "openrouter_direct",
 ) -> dict:
     """Agent 10: Review a fix for correctness, safety, and consistency.
@@ -407,7 +417,7 @@ async def run_code_reviewer(
 async def run_escalation_agent(
     system_prompt: str,
     task_prompt: str,
-    model: str = "anthropic/claude-haiku-4.5",
+    model: str = "minimax/minimax-m2.5",
     ai_provider: str = "openrouter_direct",
 ) -> dict:
     """LLM-based escalation agent for the middle loop.
