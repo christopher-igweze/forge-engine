@@ -37,32 +37,33 @@ FORGE_ROLE_TO_MODEL_FIELD: dict[str, str] = {
 # ── Default model assignments per spec ────────────────────────────────
 
 FORGE_DEFAULT_MODELS: dict[str, str] = {
-    # Analysis agents — cheap
+    # All agents use MiniMax M2.5 — 80.2% SWE-bench, $0.30/$1.20 per MTok
+    # Analysis agents
     "codebase_analyst_model": "minimax/minimax-m2.5",
     "quality_auditor_model": "minimax/minimax-m2.5",
-    "debt_tracker_model": "anthropic/claude-haiku-4.5",
-    # Reasoning agents — mid-tier
-    "security_auditor_model": "anthropic/claude-haiku-4.5",
-    "architecture_reviewer_model": "anthropic/claude-haiku-4.5",
-    "fix_strategist_model": "anthropic/claude-haiku-4.5",
-    "triage_classifier_model": "anthropic/claude-haiku-4.5",
-    "test_generator_model": "anthropic/claude-haiku-4.5",
-    "code_reviewer_model": "anthropic/claude-haiku-4.5",
-    "integration_validator_model": "anthropic/claude-haiku-4.5",
-    # Coding agents — NON-NEGOTIABLE frontier model
-    "coder_tier2_model": "anthropic/claude-sonnet-4.6",
-    "coder_tier3_model": "anthropic/claude-sonnet-4.6",
-    # Hive Discovery — cheap workers + strong synthesizer
+    "debt_tracker_model": "minimax/minimax-m2.5",
+    # Reasoning agents
+    "security_auditor_model": "minimax/minimax-m2.5",
+    "architecture_reviewer_model": "minimax/minimax-m2.5",
+    "fix_strategist_model": "minimax/minimax-m2.5",
+    "triage_classifier_model": "minimax/minimax-m2.5",
+    "test_generator_model": "minimax/minimax-m2.5",
+    "code_reviewer_model": "minimax/minimax-m2.5",
+    "integration_validator_model": "minimax/minimax-m2.5",
+    # Coding agents
+    "coder_tier2_model": "minimax/minimax-m2.5",
+    "coder_tier3_model": "minimax/minimax-m2.5",
+    # Hive Discovery
     "swarm_worker_model": "minimax/minimax-m2.5",
-    "synthesizer_model": "anthropic/claude-sonnet-4.6",
-    # Post-discovery intent analysis — cheap
+    "synthesizer_model": "minimax/minimax-m2.5",
+    # Post-discovery intent analysis
     "intent_analyzer_model": "minimax/minimax-m2.5",
 }
 
 # ── Provider routing ──────────────────────────────────────────────────
 
 # Analysis/planning agents use openrouter_direct (text-in/JSON-out, no tools)
-# Coding agents use opencode (needs Read/Write/Edit/Bash/Glob/Grep tools)
+# Coding agents use openrouter_tools (native function calling via OpenRouter API)
 
 ROLE_TO_PROVIDER: dict[str, str] = {
     "codebase_analyst": "openrouter_direct",
@@ -71,11 +72,11 @@ ROLE_TO_PROVIDER: dict[str, str] = {
     "architecture_reviewer": "openrouter_direct",
     "fix_strategist": "openrouter_direct",
     "triage_classifier": "openrouter_direct",
-    "coder_tier2": "opencode",
-    "coder_tier3": "opencode",
+    "coder_tier2": "openrouter_tools",
+    "coder_tier3": "openrouter_tools",
     "test_generator": "openrouter_direct",
     "code_reviewer": "openrouter_direct",
-    "integration_validator": "opencode",
+    "integration_validator": "openrouter_tools",
     "debt_tracker": "openrouter_direct",
     # Hive Discovery
     "swarm_worker": "openrouter_direct",
