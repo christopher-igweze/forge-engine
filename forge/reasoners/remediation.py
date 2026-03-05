@@ -100,7 +100,7 @@ async def run_coder_tier2(
     iteration: int = 1,
     model: str = "minimax/minimax-m2.5",
     ai_provider: str = "opencode",
-    max_turns: int = 30,
+    max_turns: int = 15,
 ) -> dict:
     """Agent 7: Apply a scoped fix (1-3 files) for a Tier 2 finding.
 
@@ -189,7 +189,7 @@ async def run_coder_tier3(
     iteration: int = 1,
     model: str = "minimax/minimax-m2.5",
     ai_provider: str = "opencode",
-    max_turns: int = 60,
+    max_turns: int = 30,
 ) -> dict:
     """Agent 8: Apply an architectural fix (5-15 files) for a Tier 3 finding.
 
