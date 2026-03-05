@@ -51,6 +51,156 @@ logger = logging.getLogger(__name__)
 _FIX_CONCURRENCY_LIMIT = asyncio.Semaphore(4)
 
 
+# ── Test Failure Classification ──────────────────────────────────────
+
+
+def _classify_test_failure(test_exec) -> str:
+    """Classify a test failure as environment, test_bug, or code_bug.
+
+    Returns:
+        "environment" — env noise (urllib3, missing system deps) → ignore tests
+        "test_bug"    — test itself broken (import error, 0 tests ran) → preserve APPROVE
+        "code_bug"    — real assertion failures → override to REQUEST_CHANGES
+    """
+    err = test_exec.error_output.lower() if test_exec.error_output else ""
+
+    # No tests ran at all → test is broken, not the code
+    if test_exec.tests_run == 0:
+        return "test_bug"
+
+    # Environment patterns
+    env_patterns = [
+        "urllib3", "libressl", "openssl", "deprecationwarning",
+        "insecurerequestwarning", "notopenssl",
+        "npm warn", "npm err!", "experimentalwarning",
+        "no module named 'flask_restful'",
+        "no module named 'flask_sqlalchemy'",
+        "no module named 'flask_cors'",
+        "modulenotfounderror", "no module named",
+        "pkg_resources",
+    ]
+    if any(p in err for p in env_patterns):
+        return "environment"
+
+    # Test bug patterns — test file itself has issues
+    test_bug_patterns = [
+        "importerror", "syntaxerror", "indentationerror",
+        "nameerror", "typeerror: cannot read prop",
+        "cannot find module", "module not found",
+        "no tests found", "no test files found",
+        "test suite failed to run",
+        "referenceerror",
+    ]
+    if any(p in err for p in test_bug_patterns):
+        return "test_bug"
+
+    # Default: real test failure → the code has a bug
+    return "code_bug"
+
+
+# ── Test Context Collector for Agent 9 ───────────────────────────────
+
+
+def _collect_test_context(
+    worktree_path: str,
+    files_changed: list[str],
+    codebase_map: dict | None = None,
+) -> dict:
+    """Pre-collect project context so Agent 9 can generate accurate tests.
+
+    Returns a dict with:
+        framework: detected test framework name
+        source_files: {path: content} for modified files (max 3, 2KB each)
+        existing_test_sample: content of one existing test file (for pattern matching)
+        project_hints: relevant config snippets (package.json scripts, conftest, etc.)
+    """
+    from forge.execution.test_runner import detect_test_framework
+
+    ctx: dict = {
+        "framework": "",
+        "source_files": {},
+        "existing_test_sample": "",
+        "project_hints": "",
+    }
+
+    root = os.path.join(worktree_path, "")
+
+    # 1. Detect test framework
+    ctx["framework"] = detect_test_framework(worktree_path)
+
+    # 2. Read source code of modified files (max 3 files, 2KB each)
+    for fp in files_changed[:3]:
+        abs_path = os.path.join(worktree_path, fp) if not os.path.isabs(fp) else fp
+        try:
+            content = open(abs_path).read()[:2048]
+            # Use relative path as key
+            rel = fp if not os.path.isabs(fp) else os.path.relpath(fp, worktree_path)
+            ctx["source_files"][rel] = content
+        except OSError:
+            pass
+
+    # 3. Find an existing test file as a pattern example
+    import glob as glob_mod
+    test_patterns = [
+        os.path.join(worktree_path, "tests", "test_*.py"),
+        os.path.join(worktree_path, "test", "test_*.py"),
+        os.path.join(worktree_path, "tests", "*.test.js"),
+        os.path.join(worktree_path, "tests", "*.test.ts"),
+        os.path.join(worktree_path, "__tests__", "*.test.js"),
+        os.path.join(worktree_path, "__tests__", "*.test.ts"),
+        os.path.join(worktree_path, "test", "*.spec.js"),
+    ]
+    for pattern in test_patterns:
+        matches = glob_mod.glob(pattern)
+        if matches:
+            try:
+                ctx["existing_test_sample"] = open(matches[0]).read()[:3000]
+            except OSError:
+                pass
+            break
+
+    # 4. Project hints — config snippets relevant to testing
+    hints_parts = []
+
+    # package.json test script
+    pkg_json = os.path.join(worktree_path, "package.json")
+    if os.path.exists(pkg_json):
+        try:
+            import json
+            pkg = json.loads(open(pkg_json).read())
+            scripts = pkg.get("scripts", {})
+            dev_deps = list(pkg.get("devDependencies", {}).keys())
+            if scripts.get("test"):
+                hints_parts.append(f"Test script: {scripts['test']}")
+            if dev_deps:
+                hints_parts.append(f"Dev dependencies: {', '.join(dev_deps[:15])}")
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    # conftest.py
+    conftest = os.path.join(worktree_path, "conftest.py")
+    if not os.path.exists(conftest):
+        conftest = os.path.join(worktree_path, "tests", "conftest.py")
+    if os.path.exists(conftest):
+        try:
+            hints_parts.append(f"conftest.py:\n{open(conftest).read()[:1500]}")
+        except OSError:
+            pass
+
+    # requirements.txt — so Agent 9 knows what's available
+    for req_file in ("requirements.txt", "requirements-dev.txt"):
+        req_path = os.path.join(worktree_path, req_file)
+        if os.path.exists(req_path):
+            try:
+                hints_parts.append(f"{req_file}:\n{open(req_path).read()[:1000]}")
+            except OSError:
+                pass
+            break
+
+    ctx["project_hints"] = "\n\n".join(hints_parts)
+    return ctx
+
+
 # ── Inner Loop: Coder → Review → Retry ───────────────────────────────
 
 
@@ -80,10 +230,10 @@ async def run_inner_loop(
     # Select coder based on tier
     if item.tier == RemediationTier.TIER_3:
         coder_reasoner = f"{node_id}.run_coder_tier3"
-        coder_model = resolved_models.get("coder_tier3_model", "anthropic/claude-sonnet-4.6")
+        coder_model = resolved_models.get("coder_tier3_model", "minimax/minimax-m2.5")
     else:
         coder_reasoner = f"{node_id}.run_coder_tier2"
-        coder_model = resolved_models.get("coder_tier2_model", "anthropic/claude-sonnet-4.6")
+        coder_model = resolved_models.get("coder_tier2_model", "minimax/minimax-m2.5")
 
     review_feedback = ""
 
@@ -129,13 +279,21 @@ async def run_inner_loop(
             pass  # Non-fatal: reviewer works without diff, just less context
 
         # ── Step 2: Test Generator + Code Reviewer (parallel) ──────────
+        # Collect project context for Agent 9 so it generates accurate tests
+        test_context = _collect_test_context(
+            worktree_path,
+            coder_result.files_changed or [],
+            codebase_map,
+        )
+
         test_coro = app.call(
             f"{node_id}.run_test_generator",
             finding=finding_dict,
             code_change=coder_result.model_dump(),
             code_diff=actual_diff,
             worktree_path=worktree_path,
-            model=resolved_models.get("test_generator_model", "anthropic/claude-haiku-4.5"),
+            test_context=test_context,
+            model=resolved_models.get("test_generator_model", "minimax/minimax-m2.5"),
             ai_provider=cfg.provider_for_role("test_generator"),
         )
         review_coro = app.call(
@@ -144,7 +302,7 @@ async def run_inner_loop(
             code_change=coder_result.model_dump(),
             code_diff=actual_diff,
             codebase_map=codebase_map,
-            model=resolved_models.get("code_reviewer_model", "anthropic/claude-haiku-4.5"),
+            model=resolved_models.get("code_reviewer_model", "minimax/minimax-m2.5"),
             ai_provider=cfg.provider_for_role("code_reviewer"),
         )
 
@@ -204,16 +362,28 @@ async def run_inner_loop(
             loop_state.review_result = ForgeCodeReviewResult(**_unwrap(review_raw))
 
         # ── Step 3: Decision ───────────────────────────────────────────
-        # Override APPROVE → REQUEST_CHANGES if tests fail
+        # Smart quality gate: classify test failures before overriding
         if test_exec and not test_exec.success:
-            if loop_state.review_result.decision == ReviewDecision.APPROVE:
-                loop_state.review_result.decision = ReviewDecision.REQUEST_CHANGES
-                loop_state.review_result.summary = (
-                    f"Code review passed but tests failed "
-                    f"({test_exec.tests_failed}/{test_exec.tests_run}): "
-                    f"{test_exec.error_output[:300]}"
-                )
-                logger.info("Inner loop: overriding APPROVE → REQUEST_CHANGES due to test failures")
+            failure_class = _classify_test_failure(test_exec)
+            logger.info(
+                "Inner loop: test failure classified as '%s' for %s",
+                failure_class, finding.title,
+            )
+
+            if failure_class == "code_bug":
+                # Real test failure → override APPROVE to REQUEST_CHANGES
+                if loop_state.review_result.decision == ReviewDecision.APPROVE:
+                    loop_state.review_result.decision = ReviewDecision.REQUEST_CHANGES
+                    loop_state.review_result.summary = (
+                        f"Code review passed but tests found code issues "
+                        f"({test_exec.tests_failed}/{test_exec.tests_run}): "
+                        f"{test_exec.error_output[:300]}"
+                    )
+                    logger.info("Inner loop: overriding APPROVE → REQUEST_CHANGES (code_bug)")
+            elif failure_class == "environment":
+                logger.info("Inner loop: ignoring test failure (environment noise) — preserving review decision")
+            elif failure_class == "test_bug":
+                logger.info("Inner loop: ignoring test failure (test itself broken) — preserving review decision")
 
         if loop_state.review_result.decision == ReviewDecision.APPROVE:
             coder_result.outcome = FixOutcome.COMPLETED
@@ -306,7 +476,7 @@ async def _llm_escalation(
         iteration_count=inner_state.iteration,
     )
 
-    model = resolved_models.get("fix_strategist_model", "anthropic/claude-haiku-4.5")
+    model = resolved_models.get("fix_strategist_model", "minimax/minimax-m2.5")
     provider = cfg.provider_for_role("fix_strategist")
 
     result = await app.call(
@@ -429,7 +599,7 @@ async def run_outer_loop(
         all_findings=remaining_findings,
         codebase_map=codebase_map_dict,
         triage_result=state.triage_result.model_dump() if state.triage_result else None,
-        model=resolved_models.get("fix_strategist_model", "anthropic/claude-haiku-4.5"),
+        model=resolved_models.get("fix_strategist_model", "minimax/minimax-m2.5"),
         ai_provider=cfg.provider_for_role("fix_strategist"),
     )
 
