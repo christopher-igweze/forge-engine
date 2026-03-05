@@ -48,7 +48,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Max concurrent remediation fix executions (limits parallel opencode subprocesses)
-_FIX_CONCURRENCY_LIMIT = asyncio.Semaphore(4)
+_FIX_CONCURRENCY_LIMIT = asyncio.Semaphore(8)
 
 
 # ── Test Failure Classification ──────────────────────────────────────
