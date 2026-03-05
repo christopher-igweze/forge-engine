@@ -15,6 +15,45 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# ── Environment noise patterns ────────────────────────────────────────
+# These warnings come from the environment, not from test failures.
+# Stripping them prevents false negatives in test result parsing.
+
+_ENV_NOISE_PATTERNS = [
+    # Python / pip
+    "urllib3",
+    "LibreSSL",
+    "DeprecationWarning",
+    "PendingDeprecationWarning",
+    "InsecureRequestWarning",
+    "NotOpenSSLWarning",
+    "CryptographyDeprecationWarning",
+    "pkg_resources is deprecated",
+    "SetuptoolsDeprecationWarning",
+    # Node / npm
+    "npm WARN",
+    "npm warn",
+    "ExperimentalWarning",
+    "punycode",
+    # Generic
+    "FutureWarning",
+    "ResourceWarning",
+]
+
+
+def _filter_environment_noise(output: str) -> str:
+    """Strip known environment warnings from test output.
+
+    Returns cleaned output with only test-relevant lines.
+    """
+    lines = output.splitlines()
+    filtered = []
+    for line in lines:
+        if any(pattern in line for pattern in _ENV_NOISE_PATTERNS):
+            continue
+        filtered.append(line)
+    return "\n".join(filtered)
+
 
 @dataclass
 class TestExecutionResult:
@@ -206,7 +245,7 @@ def _run_jest(
             tests_run=result_data.get("numTotalTests", 0),
             tests_passed=result_data.get("numPassedTests", 0),
             tests_failed=result_data.get("numFailedTests", 0),
-            error_output=proc.stderr[:500] if proc.stderr else "",
+            error_output=_filter_environment_noise(proc.stderr[:500]) if proc.stderr else "",
             framework="jest",
         )
     except json.JSONDecodeError:
@@ -239,7 +278,7 @@ def _run_vitest(
             tests_run=result_data.get("numTotalTests", 0),
             tests_passed=result_data.get("numPassedTests", 0),
             tests_failed=result_data.get("numFailedTests", 0),
-            error_output=proc.stderr[:500] if proc.stderr else "",
+            error_output=_filter_environment_noise(proc.stderr[:500]) if proc.stderr else "",
             framework="vitest",
         )
     except json.JSONDecodeError:
@@ -272,11 +311,36 @@ def _run_mocha(
             tests_run=stats.get("tests", 0),
             tests_passed=stats.get("passes", 0),
             tests_failed=stats.get("failures", 0),
-            error_output=proc.stderr[:500] if proc.stderr else "",
+            error_output=_filter_environment_noise(proc.stderr[:500]) if proc.stderr else "",
             framework="mocha",
         )
     except json.JSONDecodeError:
         return _parse_text_output(proc, "mocha")
+
+
+def _find_python(worktree_path: str) -> str:
+    """Find the best Python executable for the target project."""
+    import shutil
+
+    # 1. Check for project venv
+    venv_python = os.path.join(worktree_path, ".venv", "bin", "python3")
+    if os.path.isfile(venv_python):
+        return venv_python
+    venv_python2 = os.path.join(worktree_path, ".venv", "bin", "python")
+    if os.path.isfile(venv_python2):
+        return venv_python2
+
+    # 2. Prefer python3 on PATH (macOS doesn't ship 'python')
+    python3 = shutil.which("python3")
+    if python3:
+        return python3
+
+    # 3. Fallback to python
+    python = shutil.which("python")
+    if python:
+        return python
+
+    return "python3"  # last resort — will error with a clear message
 
 
 def _run_pytest(
@@ -285,7 +349,8 @@ def _run_pytest(
     timeout: int,
 ) -> TestExecutionResult:
     """Run pytest and parse output."""
-    cmd = ["python", "-m", "pytest", "-q", "--tb=short", "--no-header"]
+    python_bin = _find_python(worktree_path)
+    cmd = [python_bin, "-m", "pytest", "-q", "--tb=short", "--no-header"]
     if test_files:
         cmd.extend(test_files)
 
@@ -299,7 +364,7 @@ def _run_pytest(
 
     # Parse pytest summary line: "X passed, Y failed"
     import re
-    output = proc.stdout + proc.stderr
+    output = _filter_environment_noise(proc.stdout + proc.stderr)
     passed = 0
     failed = 0
 
@@ -326,7 +391,7 @@ def _parse_text_output(
 ) -> TestExecutionResult:
     """Fallback parser for text output when JSON parsing fails."""
     import re
-    output = proc.stdout + proc.stderr
+    output = _filter_environment_noise(proc.stdout + proc.stderr)
 
     passed = 0
     failed = 0
