@@ -23,6 +23,7 @@ FORGE_ROLE_TO_MODEL_FIELD: dict[str, str] = {
     "triage_classifier": "triage_classifier_model",
     "coder_tier2": "coder_tier2_model",
     "coder_tier3": "coder_tier3_model",
+    "coder_fallback": "coder_fallback_model",
     "test_generator": "test_generator_model",
     "code_reviewer": "code_reviewer_model",
     "integration_validator": "integration_validator_model",
@@ -53,6 +54,8 @@ FORGE_DEFAULT_MODELS: dict[str, str] = {
     # Coding agents
     "coder_tier2_model": "minimax/minimax-m2.5",
     "coder_tier3_model": "minimax/minimax-m2.5",
+    # Fallback: escalate to Kimi K2.5 after 2 failed attempts
+    "coder_fallback_model": "moonshotai/kimi-k2.5",
     # Hive Discovery
     "swarm_worker_model": "minimax/minimax-m2.5",
     "synthesizer_model": "minimax/minimax-m2.5",
@@ -74,6 +77,7 @@ ROLE_TO_PROVIDER: dict[str, str] = {
     "triage_classifier": "openrouter_direct",
     "coder_tier2": "openrouter_tools",
     "coder_tier3": "openrouter_tools",
+    "coder_fallback": "openrouter_tools",
     "test_generator": "openrouter_direct",
     "code_reviewer": "openrouter_direct",
     "integration_validator": "openrouter_tools",

@@ -69,9 +69,14 @@ def _classify_test_failure(test_exec) -> str:
     if test_exec.tests_run == 0:
         return "test_bug"
 
-    # Environment patterns
+    # All tests actually passed — output noise (warnings, deprecations), not failures
+    if test_exec.tests_passed >= test_exec.tests_run and test_exec.tests_run > 0:
+        return "environment"
+
+    # Environment patterns — third-party warnings, missing system deps
     env_patterns = [
-        "urllib3", "libressl", "openssl", "deprecationwarning",
+        "urllib3", "libressl", "openssl",
+        "deprecationwarning", "pendingdeprecationwarning",
         "insecurerequestwarning", "notopenssl",
         "npm warn", "npm err!", "experimentalwarning",
         "no module named 'flask_restful'",
@@ -79,9 +84,14 @@ def _classify_test_failure(test_exec) -> str:
         "no module named 'flask_cors'",
         "modulenotfounderror", "no module named",
         "pkg_resources",
+        "from jsonschema import refresolver",  # flask_restx deprecation
+        "flask_restx",
     ]
     if any(p in err for p in env_patterns):
-        return "environment"
+        # If most tests passed (>80%), failures are likely env noise not real bugs
+        pass_rate = test_exec.tests_passed / max(test_exec.tests_run, 1)
+        if pass_rate > 0.8:
+            return "environment"
 
     # Test bug patterns — test file itself has issues
     test_bug_patterns = [
@@ -366,9 +376,20 @@ async def run_inner_loop(
         coder_reasoner = f"{node_id}.run_coder_tier2"
         coder_model = resolved_models.get("coder_tier2_model", "minimax/minimax-m2.5")
 
+    base_coder_model = coder_model  # preserve original for logging
+
     review_feedback = ""
 
     for iteration in range(1, cfg.max_inner_retries + 1):
+        # After 2 failed attempts, escalate to fallback model (e.g. Kimi K2.5)
+        if iteration >= 2:
+            fallback = resolved_models.get("coder_fallback_model")
+            if fallback and coder_model != fallback:
+                coder_model = fallback
+                logger.info(
+                    "Model escalation: %s → %s for %s",
+                    base_coder_model, fallback, finding.title,
+                )
         loop_state.iteration = iteration
         logger.info(
             "Inner loop: %s — iteration %d/%d",
