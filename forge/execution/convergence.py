@@ -317,31 +317,7 @@ async def _run_delta_discovery(
                 except Exception as e:
                     logger.warning("Failed to parse delta finding: %s", e)
 
-    logger.info("Delta discovery: found %d raw findings", len(new_findings))
-
-    # Post-filter: remove findings that match prior issues (not regressions)
-    ref_findings = state.prior_iteration_findings or state.all_findings
-    if ref_findings and new_findings:
-        prior_titles = {f.title.lower().strip() for f in ref_findings}
-        prior_prefixes = {" ".join(t.split()[:5]) for t in prior_titles}
-
-        filtered = []
-        for f in new_findings:
-            t = f.title.lower().strip()
-            prefix = " ".join(t.split()[:5])
-            if t in prior_titles:
-                logger.info("Delta filter: exact dup '%s'", f.title)
-                continue
-            if prefix in prior_prefixes:
-                logger.info("Delta filter: variant '%s'", f.title)
-                continue
-            filtered.append(f)
-
-        logger.info(
-            "Delta discovery: %d raw → %d after regression filter",
-            len(new_findings), len(filtered),
-        )
-        new_findings = filtered
+    logger.info("Delta discovery: found %d new findings", len(new_findings))
 
     return new_findings
 
