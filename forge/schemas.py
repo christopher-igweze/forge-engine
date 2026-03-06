@@ -539,6 +539,16 @@ class EscalationDecision(BaseModel):
     split_items: list[RemediationItem] = Field(default_factory=list)
 
 
+class DeferredFindingContext(BaseModel):
+    """Failure context for a deferred finding — flows through convergence loop."""
+
+    finding_id: str
+    attempts: int = 0
+    test_output: str = ""  # last test failure excerpt
+    review_feedback: str = ""  # accumulated reviewer feedback
+    escalation_reason: str = ""  # why it was deferred
+
+
 class OuterLoopState(BaseModel):
     """Tracks the outer re-planning loop."""
 
@@ -547,6 +557,7 @@ class OuterLoopState(BaseModel):
     remaining_plan: RemediationPlan | None = None
     completed_fixes: list[CoderFixResult] = Field(default_factory=list)
     deferred_findings: list[str] = Field(default_factory=list)
+    deferred_context: dict[str, DeferredFindingContext] = Field(default_factory=dict)
     escalations: list[EscalationDecision] = Field(default_factory=list)
 
 

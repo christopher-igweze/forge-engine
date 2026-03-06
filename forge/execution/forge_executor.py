@@ -29,6 +29,7 @@ from forge.execution.json_utils import safe_parse_agent_response
 from forge.schemas import (
     AuditFinding,
     CoderFixResult,
+    DeferredFindingContext,
     EscalationAction,
     EscalationDecision,
     FixOutcome,
@@ -96,6 +97,34 @@ def _classify_test_failure(test_exec) -> str:
 
     # Default: real test failure → the code has a bug
     return "code_bug"
+
+
+def _store_deferral_context(
+    state: ForgeExecutionState,
+    finding_id: str,
+    inner_state: InnerLoopState,
+    escalation,
+) -> None:
+    """Store failure context when deferring a finding.
+
+    This context flows through the convergence loop to give the Fix Strategist
+    and next coder specific direction about what went wrong.
+    """
+    test_output = ""
+    if inner_state.test_result and inner_state.test_result.coverage_summary:
+        test_output = inner_state.test_result.coverage_summary[:500]
+    # Also grab the review summary which often contains test failure details
+    review_summary = ""
+    if inner_state.review_result:
+        review_summary = inner_state.review_result.summary[:500]
+
+    state.outer_loop.deferred_context[finding_id] = DeferredFindingContext(
+        finding_id=finding_id,
+        attempts=inner_state.iteration,
+        test_output=test_output or review_summary,
+        review_feedback=inner_state.review_feedback[:500] if inner_state.review_feedback else "",
+        escalation_reason=escalation.rationale[:500] if hasattr(escalation, "rationale") and escalation.rationale else "",
+    )
 
 
 # ── Test Retry (re-invoke Agent 9 with failure feedback) ─────────────
@@ -933,6 +962,8 @@ async def _execute_single_fix(
 
         if escalation.action == EscalationAction.DEFER:
             state.outer_loop.deferred_findings.append(finding.id)
+            # Store failure context so convergence loop can give the coder direction
+            _store_deferral_context(state, finding.id, inner_state, escalation)
             # Do NOT append to completed_fixes — deferred items tracked separately
             if broker:
                 await broker.record_failure(finding.id, "deferred")
@@ -958,6 +989,7 @@ async def _execute_single_fix(
                 state.completed_fixes.append(new_inner.coder_result)
             else:
                 state.outer_loop.deferred_findings.append(finding.id)
+                _store_deferral_context(state, finding.id, new_inner, escalation)
 
         elif escalation.action == EscalationAction.ESCALATE:
             # Will be handled by outer loop

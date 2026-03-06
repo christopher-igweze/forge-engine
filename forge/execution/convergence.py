@@ -448,18 +448,33 @@ def _build_convergence_context(
             + "\n".join(f"  - {i}" for i in state.integration_result.new_issues_introduced[:10])
         )
 
-    # Deferred findings that must now be addressed
+    # Deferred findings that must now be addressed — with failure context
     if state.outer_loop.deferred_findings:
-        deferred_titles = []
+        deferred_lines = []
         finding_map = {f.id: f for f in state.all_findings}
         for fid in state.outer_loop.deferred_findings[:10]:
             f = finding_map.get(fid)
-            if f:
-                deferred_titles.append(f"  - [{f.severity.value}] {f.title}")
-        if deferred_titles:
+            if not f:
+                continue
+            line = f"  - [{f.severity.value}] {f.title}"
+            # Attach failure context so Fix Strategist knows WHY it failed
+            ctx = state.outer_loop.deferred_context.get(fid)
+            if ctx:
+                details = []
+                if ctx.review_feedback:
+                    details.append(f"Review: {ctx.review_feedback}")
+                if ctx.test_output:
+                    details.append(f"Test output: {ctx.test_output}")
+                if ctx.escalation_reason:
+                    details.append(f"Escalation: {ctx.escalation_reason}")
+                if details:
+                    line += "\n    " + "\n    ".join(details)
+            deferred_lines.append(line)
+        if deferred_lines:
             parts.append(
-                "Previously deferred findings that MUST be planned:\n"
-                + "\n".join(deferred_titles)
+                "Previously deferred findings that MUST be planned.\n"
+                "Use the failure context below to guide the coder on a DIFFERENT approach:\n"
+                + "\n".join(deferred_lines)
             )
 
     return "\n".join(parts)
