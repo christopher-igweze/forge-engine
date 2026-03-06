@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from pathlib import Path
 
 from forge.schemas import (
@@ -98,10 +99,73 @@ def read_package_manifests(repo_path: str) -> str:
     return "\n".join(parts) if parts else "(no package manifests found)"
 
 
-def read_file_safe(path: str, max_chars: int = 15_000) -> str:
-    """Read a file, truncating if necessary."""
+_NOTEBOOK_OUTPUT_RE = re.compile(
+    r'"outputs"\s*:\s*\[.*?\]',
+    re.DOTALL,
+)
+
+
+def _read_notebook_stripped(path: Path) -> dict:
+    """Read a Jupyter notebook, stripping cell outputs to avoid loading
+    massive base64-encoded images/plots into memory."""
+    raw = path.read_text(errors="replace")
+    # Fast-path: if file is small, just parse directly
+    if len(raw) < 1_000_000:  # < 1 MB
+        return json.loads(raw)
+    # For large notebooks, strip outputs before parsing
+    stripped = _NOTEBOOK_OUTPUT_RE.sub('"outputs": []', raw)
+    return json.loads(stripped)
+
+
+def _extract_notebook_code(path: Path, max_cells: int = 30) -> str:
+    """Extract code cells from a Jupyter notebook for agent context.
+
+    Returns a readable representation with cell numbers and source code,
+    stripping away JSON structure, metadata, and outputs.
+    """
     try:
-        content = Path(path).read_text(errors="replace")
+        data = _read_notebook_stripped(path)
+        cells = data.get("cells", [])
+        parts: list[str] = []
+        code_idx = 0
+        for i, cell in enumerate(cells):
+            ctype = cell.get("cell_type", "")
+            source = cell.get("source", [])
+            if isinstance(source, list):
+                text = "".join(source)
+            else:
+                text = source or ""
+            if not text.strip():
+                continue
+            if ctype == "code":
+                parts.append(f"# --- Code Cell {code_idx} (cell {i}) ---\n{text}")
+                code_idx += 1
+            elif ctype == "markdown":
+                # Include markdown cells as comments for context
+                short = text[:300]
+                parts.append(f"# --- Markdown Cell {i} ---\n# {short}")
+            if code_idx >= max_cells:
+                parts.append(f"# ... ({len(cells) - i - 1} more cells omitted)")
+                break
+        if not parts:
+            return "(empty notebook — no code cells found)"
+        return "\n\n".join(parts)
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return "(failed to parse notebook JSON)"
+
+
+def read_file_safe(path: str, max_chars: int = 15_000) -> str:
+    """Read a file, truncating if necessary.
+
+    For Jupyter notebooks (.ipynb), extracts code cells instead of
+    returning raw JSON — agents see readable Python, not metadata noise.
+    """
+    try:
+        p = Path(path)
+        if p.suffix.lower() == ".ipynb":
+            content = _extract_notebook_code(p)
+        else:
+            content = p.read_text(errors="replace")
         if len(content) > max_chars:
             content = content[:max_chars] + f"\n... (truncated at {max_chars} chars)"
         return content
@@ -317,7 +381,7 @@ def select_files_for_quality_pass(
 def _count_notebook_loc(fpath: Path) -> int:
     """Count source lines in Jupyter notebook code cells."""
     try:
-        data = json.loads(fpath.read_text(errors="replace"))
+        data = _read_notebook_stripped(fpath)
         cells = data.get("cells", [])
         total = 0
         for cell in cells:
