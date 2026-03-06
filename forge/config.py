@@ -133,6 +133,11 @@ class ForgeConfig(BaseModel):
     # ── Project Context ───────────────────────────────────────────
     project_context: dict = {}  # User-provided project context for scan personalization
 
+    # ── Webhook Event Emission ────────────────────────────────────
+    webhook_url: str = ""       # POST endpoint for scan progress events
+    webhook_token: str = ""     # HMAC-SHA256 signing secret
+    webhook_scan_id: str = ""   # Scan ID included in every event payload
+
     # ── Convergence Loop ─────────────────────────────────────────────
     convergence_enabled: bool = True
     convergence_target_score: int = 95
