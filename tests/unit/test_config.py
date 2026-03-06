@@ -37,17 +37,17 @@ class TestForgeConfig:
 
     def test_model_for_role(self):
         cfg = ForgeConfig()
-        assert cfg.model_for_role("coder_tier2") == "minimax/minimax-m2.5"
+        assert cfg.model_for_role("coder_tier2") == "anthropic/claude-sonnet-4.6"
         assert cfg.model_for_role("codebase_analyst") == "minimax/minimax-m2.5"
 
     def test_model_for_unknown_role(self):
         cfg = ForgeConfig()
-        # Unknown role falls back to "minimax/minimax-m2.5" (default return)
+        # Unknown role falls back to first default model value
         assert cfg.model_for_role("nonexistent") == "minimax/minimax-m2.5"
 
     def test_provider_for_role(self):
         cfg = ForgeConfig()
-        assert cfg.provider_for_role("coder_tier2") == "openrouter_tools"
+        assert cfg.provider_for_role("coder_tier2") == "opencode"
         assert cfg.provider_for_role("code_reviewer") == "openrouter_direct"
 
     def test_provider_for_unknown_role(self):
@@ -82,7 +82,7 @@ class TestForgeConfig:
         resolved = cfg.resolved_models()
         assert resolved != FORGE_DEFAULT_MODELS
         # Verify defaults are NOT mutated
-        assert FORGE_DEFAULT_MODELS["coder_tier2_model"] == "minimax/minimax-m2.5"
+        assert FORGE_DEFAULT_MODELS["coder_tier2_model"] == "anthropic/claude-sonnet-4.6"
 
     def test_unknown_role_override_ignored(self):
         """Overriding a role not in FORGE_ROLE_TO_MODEL_FIELD has no effect."""
