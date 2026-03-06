@@ -34,9 +34,26 @@ def test_generator_task_prompt(
     existing_tests: str = "",
     framework_hint: str = "",
     project_hints: str = "",
+    prior_test_failure: dict | None = None,
 ) -> str:
     """Build the task prompt for the test generator."""
     parts = []
+
+    # Prior test failure feedback — Agent 9 must fix its own broken tests
+    if prior_test_failure:
+        parts.append(
+            "## PREVIOUS TEST FAILURE — YOU MUST FIX THIS\n"
+            "Your previous test generation produced broken tests. Here is what happened:\n\n"
+            f"### Your Previous Test Code\n```\n{prior_test_failure.get('original_test_code', '')}\n```\n\n"
+            f"### Error Output\n```\n{prior_test_failure.get('error_output', '')}\n```\n\n"
+            f"Tests run: {prior_test_failure.get('tests_run', 0)}, "
+            f"Tests passed: {prior_test_failure.get('tests_passed', 0)}\n\n"
+            "INSTRUCTIONS:\n"
+            "- Analyze the error output to understand WHY your tests failed\n"
+            "- Fix ALL issues: syntax errors, import errors, wrong assertions, wrong function signatures\n"
+            "- Make sure your tests actually match the code diff below\n"
+            "- Do NOT repeat the same mistakes\n"
+        )
 
     # Framework hint at the top so Agent 9 knows immediately
     if framework_hint:

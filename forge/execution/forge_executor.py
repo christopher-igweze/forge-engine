@@ -98,6 +98,108 @@ def _classify_test_failure(test_exec) -> str:
     return "code_bug"
 
 
+# ── Test Retry (re-invoke Agent 9 with failure feedback) ─────────────
+
+
+async def _retry_test_generation(
+    app: Agent,
+    node_id: str,
+    finding: AuditFinding,
+    code_change: CoderFixResult,
+    code_diff: str,
+    worktree_path: str,
+    test_context: dict,
+    failed_test_exec,
+    original_test_contents: list,
+    cfg: "ForgeConfig",
+    resolved_models: dict[str, str],
+):
+    """Retry Agent 9 once when initial tests are broken (test_bug).
+
+    Re-invokes test generator with original test code + failure output
+    as feedback, writes new tests, runs them.
+
+    Returns (new_test_result, new_test_exec) or (None, None).
+    """
+    logger.info("Test retry: re-invoking Agent 9 for %s", finding.title)
+
+    original_test_code = "\n\n".join(
+        f"# {tfc.path}\n{tfc.content}"
+        for tfc in original_test_contents
+    )
+    error_output = (
+        failed_test_exec.error_output
+        if failed_test_exec and failed_test_exec.error_output
+        else "Tests failed to run (0 tests executed)"
+    )
+
+    prior_test_failure = {
+        "original_test_code": original_test_code[:4000],
+        "error_output": error_output[:2000],
+        "tests_run": failed_test_exec.tests_run if failed_test_exec else 0,
+        "tests_passed": failed_test_exec.tests_passed if failed_test_exec else 0,
+    }
+
+    finding_dict = finding.model_dump()
+    try:
+        test_raw = await app.call(
+            f"{node_id}.run_test_generator",
+            finding=finding_dict,
+            code_change=code_change.model_dump(),
+            code_diff=code_diff,
+            worktree_path=worktree_path,
+            test_context=test_context,
+            prior_test_failure=prior_test_failure,
+            model=resolved_models.get("test_generator_model", "minimax/minimax-m2.5"),
+            ai_provider=cfg.provider_for_role("test_generator"),
+        )
+    except Exception as e:
+        logger.error("Test retry: Agent 9 call failed: %s", e)
+        return None, None
+
+    if isinstance(test_raw, Exception):
+        logger.error("Test retry: Agent 9 returned error: %s", test_raw)
+        return None, None
+
+    new_test_result = TestGeneratorResult(**_unwrap(test_raw))
+
+    if not new_test_result.test_file_contents:
+        logger.warning("Test retry: Agent 9 returned no test files")
+        return new_test_result, None
+
+    # Write new tests to worktree
+    for tfc in new_test_result.test_file_contents:
+        test_path = os.path.join(worktree_path, tfc.path)
+        try:
+            os.makedirs(os.path.dirname(test_path), exist_ok=True)
+            with open(test_path, "w") as f:
+                f.write(tfc.content)
+        except OSError as e:
+            logger.warning("Test retry: failed to write %s: %s", test_path, e)
+
+    # Run new tests
+    try:
+        from forge.execution.test_runner import run_tests_in_worktree
+        new_test_exec = run_tests_in_worktree(
+            worktree_path,
+            test_files=[tfc.path for tfc in new_test_result.test_file_contents],
+            timeout=120,
+        )
+    except Exception as e:
+        logger.warning("Test retry: execution failed: %s", e)
+        return new_test_result, None
+
+    if new_test_exec and new_test_exec.success:
+        logger.info("Test retry: SUCCESS — tests pass for %s", finding.title)
+    elif new_test_exec:
+        logger.info(
+            "Test retry: still failing (%d/%d) for %s",
+            new_test_exec.tests_passed, new_test_exec.tests_run, finding.title,
+        )
+
+    return new_test_result, new_test_exec
+
+
 # ── Test Context Collector for Agent 9 ───────────────────────────────
 
 
@@ -383,7 +485,37 @@ async def run_inner_loop(
             elif failure_class == "environment":
                 logger.info("Inner loop: ignoring test failure (environment noise) — preserving review decision")
             elif failure_class == "test_bug":
-                logger.info("Inner loop: ignoring test failure (test itself broken) — preserving review decision")
+                logger.info("Inner loop: test_bug detected — retrying Agent 9 for %s", finding.title)
+                retry_test_result, retry_test_exec = await _retry_test_generation(
+                    app, node_id, finding, coder_result, actual_diff,
+                    worktree_path, test_context,
+                    failed_test_exec=test_exec,
+                    original_test_contents=(
+                        loop_state.test_result.test_file_contents
+                        if loop_state.test_result else []
+                    ),
+                    cfg=cfg,
+                    resolved_models=resolved_models,
+                )
+                if retry_test_result:
+                    loop_state.test_result = retry_test_result
+                if retry_test_exec and retry_test_exec.success:
+                    logger.info("Inner loop: retried tests pass — confirmed fix for %s", finding.title)
+                elif retry_test_exec and not retry_test_exec.success:
+                    retry_class = _classify_test_failure(retry_test_exec)
+                    if retry_class == "code_bug":
+                        if loop_state.review_result.decision == ReviewDecision.APPROVE:
+                            loop_state.review_result.decision = ReviewDecision.REQUEST_CHANGES
+                            loop_state.review_result.summary = (
+                                f"Retried tests found code issues "
+                                f"({retry_test_exec.tests_failed}/{retry_test_exec.tests_run}): "
+                                f"{retry_test_exec.error_output[:300]}"
+                            )
+                            logger.info("Inner loop: retried tests → code_bug → REQUEST_CHANGES")
+                    else:
+                        logger.info("Inner loop: retried tests still broken (%s) — preserving review decision", retry_class)
+                else:
+                    logger.info("Inner loop: test retry returned no exec result — preserving review decision")
 
         if loop_state.review_result.decision == ReviewDecision.APPROVE:
             coder_result.outcome = FixOutcome.COMPLETED

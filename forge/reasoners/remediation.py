@@ -274,6 +274,7 @@ async def run_test_generator(
     code_diff: str = "",
     worktree_path: str = ".",
     test_context: dict | None = None,
+    prior_test_failure: dict | None = None,
     model: str = "minimax/minimax-m2.5",
     ai_provider: str = "openrouter_direct",
     max_turns: int = 1,
@@ -297,6 +298,7 @@ async def run_test_generator(
         existing_tests=tc.get("existing_test_sample", ""),
         framework_hint=tc.get("framework", ""),
         project_hints=tc.get("project_hints", ""),
+        prior_test_failure=prior_test_failure,
     )
 
     ai = AgentAI(AgentAIConfig(
