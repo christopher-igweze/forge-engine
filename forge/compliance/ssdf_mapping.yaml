@@ -1,0 +1,247 @@
+# NIST SP 800-218A SSDF Practice Mapping for FORGE
+# Each practice maps to FORGE agent activities and evidence types
+#
+# Coverage levels:
+#   COVERED         — FORGE fully addresses this practice via agent activity
+#   PARTIAL         — FORGE partially addresses (detects but doesn't enforce)
+#   NOT_APPLICABLE  — Organizational / process practice outside FORGE scope
+
+practices:
+  PO.1:
+    name: "Define Security Requirements for Software Development"
+    description: "Ensure that security requirements are defined for development"
+    forge_coverage: COVERED
+    agents:
+      - agent_id: 1
+        agent_name: "Codebase Analyst"
+        contribution: "Maps security-relevant modules, auth boundaries, and data flows"
+        evidence_type: "codebase_map"
+      - agent_id: 4
+        agent_name: "Architecture Reviewer"
+        contribution: "Evaluates structural coherence and security design patterns"
+        evidence_type: "architecture_findings"
+
+  PO.2:
+    name: "Implement Roles and Responsibilities"
+    description: "Ensure people are prepared to perform SDLC security roles"
+    forge_coverage: NOT_APPLICABLE
+    agents: []
+    notes: "Organizational practice — outside automated tooling scope"
+
+  PO.3:
+    name: "Implement Supporting Toolchains"
+    description: "Specify and use tools to reduce security risks"
+    forge_coverage: PARTIAL
+    agents:
+      - agent_id: 2
+        agent_name: "Security Auditor"
+        contribution: "Automated security analysis toolchain"
+        evidence_type: "security_findings"
+      - agent_id: 3
+        agent_name: "Quality Auditor"
+        contribution: "Automated quality analysis toolchain"
+        evidence_type: "quality_findings"
+    notes: "FORGE is itself a supporting tool; does not manage org toolchain policy"
+
+  PO.4:
+    name: "Define and Use Criteria for Software Security Checks"
+    description: "Define criteria for security checks throughout the SDLC"
+    forge_coverage: COVERED
+    agents:
+      - agent_id: 6
+        agent_name: "Triage Classifier"
+        contribution: "Classifies findings by severity, complexity, and remediation tier"
+        evidence_type: "triage_results"
+      - agent_id: 5
+        agent_name: "Fix Strategist"
+        contribution: "Defines acceptance criteria for each remediation item"
+        evidence_type: "remediation_plan"
+
+  PO.5:
+    name: "Implement and Maintain Secure Environments"
+    description: "Ensure development environments are secure"
+    forge_coverage: NOT_APPLICABLE
+    agents: []
+    notes: "Infrastructure practice — FORGE runs in ephemeral sandboxed containers but does not manage org environments"
+
+  PS.1:
+    name: "Protect All Forms of Code from Unauthorized Access"
+    description: "Apply appropriate protections to code at rest and in transit"
+    forge_coverage: PARTIAL
+    agents:
+      - agent_id: 2
+        agent_name: "Security Auditor"
+        contribution: "Detects exposed secrets, hardcoded credentials, insecure storage"
+        evidence_type: "security_findings"
+    notes: "FORGE detects violations but does not enforce access controls"
+
+  PS.2:
+    name: "Provide a Mechanism for Verifying Software Release Integrity"
+    description: "Help software acquirers verify software integrity"
+    forge_coverage: NOT_APPLICABLE
+    agents: []
+    notes: "Release/distribution practice — outside FORGE scope"
+
+  PS.3:
+    name: "Archive and Protect Each Software Release"
+    description: "Preserve release artifacts and protect their integrity"
+    forge_coverage: NOT_APPLICABLE
+    agents: []
+    notes: "Release management practice — outside FORGE scope"
+
+  PW.1:
+    name: "Design Software to Meet Security Requirements"
+    description: "Identify and evaluate design options for security"
+    forge_coverage: COVERED
+    agents:
+      - agent_id: 4
+        agent_name: "Architecture Reviewer"
+        contribution: "Reviews design patterns, identifies insecure architecture"
+        evidence_type: "architecture_findings"
+      - agent_id: 5
+        agent_name: "Fix Strategist"
+        contribution: "Plans remediation considering design constraints"
+        evidence_type: "remediation_plan"
+
+  PW.2:
+    name: "Review the Software Design"
+    description: "Verify that the software design meets security requirements"
+    forge_coverage: COVERED
+    agents:
+      - agent_id: 4
+        agent_name: "Architecture Reviewer"
+        contribution: "Evaluates structural coherence, coupling, and layering"
+        evidence_type: "architecture_findings"
+      - agent_id: 1
+        agent_name: "Codebase Analyst"
+        contribution: "Maps architecture, data flows, and auth boundaries"
+        evidence_type: "codebase_map"
+
+  PW.4:
+    name: "Reuse Existing, Well-Secured Software"
+    description: "Decrease vulnerabilities by reusing secure components"
+    forge_coverage: PARTIAL
+    agents:
+      - agent_id: 1
+        agent_name: "Codebase Analyst"
+        contribution: "Inventories dependencies and their versions"
+        evidence_type: "codebase_map"
+      - agent_id: 2
+        agent_name: "Security Auditor"
+        contribution: "Detects known-vulnerable or outdated dependencies"
+        evidence_type: "security_findings"
+    notes: "FORGE audits dependency usage but does not enforce component selection policy"
+
+  PW.5:
+    name: "Create Source Code by Adhering to Secure Coding Practices"
+    description: "Follow secure coding practices for writing source code"
+    forge_coverage: COVERED
+    agents:
+      - agent_id: 7
+        agent_name: "Coder Tier 2"
+        contribution: "Applies secure coding patterns in scoped fixes (1-3 files)"
+        evidence_type: "fix_results"
+      - agent_id: 8
+        agent_name: "Coder Tier 3"
+        contribution: "Applies secure design patterns in architectural fixes (5-15 files)"
+        evidence_type: "fix_results"
+
+  PW.6:
+    name: "Configure the Compilation, Interpreter, and Build Processes"
+    description: "Decrease vulnerabilities via compiler/build hardening"
+    forge_coverage: NOT_APPLICABLE
+    agents: []
+    notes: "Build infrastructure practice — outside FORGE scope"
+
+  PW.7:
+    name: "Review and/or Analyze Human-Readable Code"
+    description: "Review code to identify vulnerabilities and verify standards"
+    forge_coverage: COVERED
+    agents:
+      - agent_id: 10
+        agent_name: "Code Reviewer"
+        contribution: "Reviews all fixes for correctness and security"
+        evidence_type: "review_results"
+      - agent_id: 2
+        agent_name: "Security Auditor"
+        contribution: "Multi-pass security analysis (auth_flow, data_handling, infrastructure)"
+        evidence_type: "security_findings"
+
+  PW.8:
+    name: "Test Executable Code"
+    description: "Test software to identify vulnerabilities and verify requirements"
+    forge_coverage: COVERED
+    agents:
+      - agent_id: 9
+        agent_name: "Test Generator"
+        contribution: "Generates tests for all fixes"
+        evidence_type: "test_results"
+      - agent_id: 11
+        agent_name: "Integration Validator"
+        contribution: "Runs integration tests, validates no regressions"
+        evidence_type: "validation_results"
+
+  PW.9:
+    name: "Configure Software to Have Secure Settings by Default"
+    description: "Ensure default configuration is secure"
+    forge_coverage: PARTIAL
+    agents:
+      - agent_id: 2
+        agent_name: "Security Auditor"
+        contribution: "Detects insecure default configurations (debug mode, open CORS, etc.)"
+        evidence_type: "security_findings"
+      - agent_id: 7
+        agent_name: "Coder Tier 2"
+        contribution: "Fixes insecure defaults during remediation"
+        evidence_type: "fix_results"
+    notes: "FORGE detects and remediates insecure defaults in audited code but does not set deployment configuration"
+
+  RV.1:
+    name: "Identify and Confirm Vulnerabilities on an Ongoing Basis"
+    description: "Use automated methods and manual analysis to find vulnerabilities"
+    forge_coverage: COVERED
+    agents:
+      - agent_id: 2
+        agent_name: "Security Auditor"
+        contribution: "Multi-pass security analysis (auth_flow, data_handling, infrastructure)"
+        evidence_type: "security_findings"
+      - agent_id: 3
+        agent_name: "Quality Auditor"
+        contribution: "Quality and reliability analysis (error_handling, code_patterns, performance)"
+        evidence_type: "quality_findings"
+      - agent_id: 6
+        agent_name: "Triage Classifier"
+        contribution: "Confirms and classifies findings by severity and complexity"
+        evidence_type: "triage_results"
+
+  RV.2:
+    name: "Assess, Prioritize, and Remediate Vulnerabilities"
+    description: "Analyze and prioritize each vulnerability and remediate as appropriate"
+    forge_coverage: COVERED
+    agents:
+      - agent_id: 5
+        agent_name: "Fix Strategist"
+        contribution: "Prioritizes and plans remediation execution order"
+        evidence_type: "remediation_plan"
+      - agent_id: 7
+        agent_name: "Coder Tier 2"
+        contribution: "Remediates scoped vulnerabilities"
+        evidence_type: "fix_results"
+      - agent_id: 8
+        agent_name: "Coder Tier 3"
+        contribution: "Remediates architectural vulnerabilities"
+        evidence_type: "fix_results"
+
+  RV.3:
+    name: "Analyze Vulnerabilities to Identify Root Causes"
+    description: "Analyze identified vulnerabilities to determine root causes"
+    forge_coverage: COVERED
+    agents:
+      - agent_id: 4
+        agent_name: "Architecture Reviewer"
+        contribution: "Identifies architectural root causes of vulnerability patterns"
+        evidence_type: "architecture_findings"
+      - agent_id: 12
+        agent_name: "Debt Tracker"
+        contribution: "Tracks deferred issues and identifies systemic patterns"
+        evidence_type: "debt_items"

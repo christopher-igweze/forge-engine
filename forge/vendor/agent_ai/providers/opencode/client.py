@@ -458,8 +458,19 @@ class OpenCodeProviderClient:
             env=full_env,
         )
 
-        # Wait for completion
-        stdout_b, stderr_b = await proc.communicate()
+        # Wait for completion with a hard timeout to prevent indefinite hangs.
+        # OpenCode subprocess can stall when the upstream API drops a connection
+        # mid-stream (keepalive bytes prevent socket-level timeouts from firing).
+        try:
+            stdout_b, stderr_b = await asyncio.wait_for(
+                proc.communicate(), timeout=300,  # 5 min hard cap
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise RuntimeError(
+                f"opencode subprocess timed out after 300s for model {model}"
+            )
         duration_ms = int((time.time() - start_time) * 1000)
 
         stdout_text = stdout_b.decode("utf-8", errors="replace")

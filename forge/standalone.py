@@ -27,6 +27,7 @@ from forge.config import ForgeConfig
 from forge.execution.json_utils import safe_parse_agent_response
 from forge.schemas import (
     AuditFinding,
+    FixOutcome,
     ForgeExecutionState,
     ForgeMode,
     ForgeResult,
@@ -182,8 +183,23 @@ async def run_standalone(
         _build_summary,
     )
 
+    from forge.execution.events import (
+        emit_phase_start,
+        emit_scan_complete,
+        emit_scan_error,
+    )
+
     start_time = time.time()
     cfg = ForgeConfig(**(config or {}))
+
+    # Env-var fallback for webhook config (so callers don't need to pass it)
+    if not cfg.webhook_url:
+        cfg.webhook_url = os.environ.get("FORGE_WEBHOOK_URL", "")
+    if not cfg.webhook_token:
+        cfg.webhook_token = os.environ.get("FORGE_WEBHOOK_TOKEN", "")
+    if not cfg.webhook_scan_id:
+        cfg.webhook_scan_id = os.environ.get("FORGE_WEBHOOK_SCAN_ID", "")
+
     resolved = cfg.resolved_models()
     dispatcher = StandaloneDispatcher()
 
@@ -211,6 +227,7 @@ async def run_standalone(
         os.makedirs(state.artifacts_dir, exist_ok=True)
 
         logger.info("FORGE standalone starting: %s", state.repo_path)
+        emit_phase_start(cfg, "orchestrator", "Starting FORGE discovery scan.")
 
         # Recover stale worktrees
         try:
@@ -264,28 +281,46 @@ async def run_standalone(
             state.total_agent_invocations += result["invocations"]
             save_checkpoint(state.repo_path, CheckpointPhase.TRIAGE, state)
 
-        # Remediation
+        # Remediation + Validation (convergence loop or single-pass)
         if cfg.mode in (ForgeMode.FULL, ForgeMode.REMEDIATION) and not cfg.dry_run:
             if resume_phase not in (
                 CheckpointPhase.REMEDIATION, CheckpointPhase.VALIDATION,
             ):
-                result = await _run_remediation(dispatcher, state, cfg, resolved)
-                state.total_agent_invocations += result["invocations"]
-                save_checkpoint(state.repo_path, CheckpointPhase.REMEDIATION, state)
+                if cfg.convergence_enabled:
+                    from forge.execution.convergence import run_convergence_loop
+                    conv_result = await run_convergence_loop(
+                        dispatcher, state, cfg, resolved, tier1_findings,
+                    )
+                    logger.info(
+                        "Convergence: %s after %d iterations (score=%d)",
+                        "converged" if conv_result.converged else "stopped",
+                        conv_result.iterations_run, conv_result.final_score,
+                    )
+                else:
+                    result = await _run_remediation(dispatcher, state, cfg, resolved)
+                    state.total_agent_invocations += result["invocations"]
+                    save_checkpoint(state.repo_path, CheckpointPhase.REMEDIATION, state)
 
-        # Validation
+        # Validation (only if convergence is disabled — convergence loop handles its own)
         if cfg.mode in (ForgeMode.FULL, ForgeMode.VALIDATION) and not cfg.dry_run:
-            if resume_phase != CheckpointPhase.VALIDATION:
-                result = await _run_validation(dispatcher, state, cfg, resolved)
-                state.total_agent_invocations += result["invocations"]
-                save_checkpoint(state.repo_path, CheckpointPhase.VALIDATION, state)
+            if not cfg.convergence_enabled:
+                if resume_phase != CheckpointPhase.VALIDATION:
+                    result = await _run_validation(dispatcher, state, cfg, resolved)
+                    state.total_agent_invocations += result["invocations"]
+                    save_checkpoint(state.repo_path, CheckpointPhase.VALIDATION, state)
 
         clear_checkpoints(state.repo_path)
         state.success = True
+        emit_scan_complete(
+            cfg,
+            f"FORGE scan complete. {len(state.all_findings)} findings.",
+            data={"total_findings": len(state.all_findings)},
+        )
 
     except Exception as e:
         logger.exception("FORGE standalone failed: %s", e)
         state.success = False
+        emit_scan_error(cfg, f"FORGE scan failed: {e}")
     finally:
         try:
             from forge.execution.worktree import cleanup_all_worktrees
@@ -366,17 +401,23 @@ async def run_standalone(
         __import__("datetime").timezone.utc
     )
 
+    actually_fixed = [
+        f for f in state.completed_fixes
+        if f.outcome in (FixOutcome.COMPLETED, FixOutcome.COMPLETED_WITH_DEBT)
+    ]
+
     result = ForgeResult(
         forge_run_id=state.forge_run_id,
         success=state.success,
         mode=state.mode,
         summary=_build_summary(state),
         total_findings=len(state.all_findings),
-        findings_fixed=len(state.completed_fixes),
+        findings_fixed=len(actually_fixed),
         findings_deferred=len(state.outer_loop.deferred_findings),
         agent_invocations=state.total_agent_invocations,
         cost_usd=state.estimated_cost_usd,
         duration_seconds=elapsed,
+        convergence_iterations=state.convergence_iteration + 1 if state.convergence_records else 0,
         readiness_report=state.readiness_report,
         discovery_report=discovery_report_data,
     )

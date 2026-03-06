@@ -28,6 +28,7 @@ dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "pytest-cov>=5.0"]
 [project.scripts]
 vibe2prod = "forge.cli:main"
 forge-engine = "forge.__main__:main"
+forge-learn = "forge.learning.cli:main"
 
 [build-system]
 requires = ["setuptools>=68.0"]

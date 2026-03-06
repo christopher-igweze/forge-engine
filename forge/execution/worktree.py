@@ -117,7 +117,80 @@ def create_worktree(
             logger.error("Failed to create worktree for %s: %s", finding_id, e2.stderr)
             raise
 
+    # Symlink node_modules from main repo if available (avoids re-install per worktree)
+    main_nm = os.path.join(repo_path, "node_modules")
+    wt_nm = os.path.join(worktree_dir, "node_modules")
+    if os.path.isdir(main_nm) and not os.path.exists(wt_nm):
+        try:
+            os.symlink(main_nm, wt_nm)
+            logger.debug("Symlinked node_modules into worktree: %s", worktree_dir)
+        except OSError as e:
+            logger.warning("Could not symlink node_modules: %s", e)
+
     return worktree_dir
+
+
+def install_project_deps(repo_path: str, timeout: int = 120) -> bool:
+    """Install project dependencies in the main repo before remediation.
+
+    Detects the project type from manifest files and runs the appropriate
+    install command. Called once before worktrees are created so that
+    symlinks can share the installed dependencies.
+
+    Returns True if deps were installed (or none needed), False on failure.
+    """
+    pkg_json = os.path.join(repo_path, "package.json")
+    req_txt = os.path.join(repo_path, "requirements.txt")
+    pyproject = os.path.join(repo_path, "pyproject.toml")
+
+    installed = False
+
+    # Node.js
+    if os.path.isfile(pkg_json) and not os.path.isdir(os.path.join(repo_path, "node_modules")):
+        logger.info("Installing Node.js dependencies in %s", repo_path)
+        try:
+            result = subprocess.run(
+                ["npm", "install", "--prefer-offline", "--no-audit", "--no-fund"],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            if result.returncode == 0:
+                logger.info("npm install succeeded")
+                installed = True
+            else:
+                logger.warning("npm install failed: %s", result.stderr[:500])
+        except FileNotFoundError:
+            logger.warning("npm not found — skipping dependency install")
+        except subprocess.TimeoutExpired:
+            logger.warning("npm install timed out after %ds", timeout)
+
+    # Python
+    if os.path.isfile(req_txt) and not os.path.isdir(os.path.join(repo_path, ".venv")):
+        logger.info("Installing Python dependencies in %s", repo_path)
+        try:
+            subprocess.run(
+                ["python3", "-m", "venv", ".venv"],
+                cwd=repo_path, capture_output=True, text=True, timeout=30,
+            )
+            pip = os.path.join(repo_path, ".venv", "bin", "pip")
+            result = subprocess.run(
+                [pip, "install", "-r", "requirements.txt"],
+                cwd=repo_path, capture_output=True, text=True, timeout=timeout,
+            )
+            if result.returncode == 0:
+                logger.info("pip install succeeded")
+                installed = True
+            else:
+                logger.warning("pip install failed: %s", result.stderr[:500])
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            logger.warning("Python dep install failed: %s", e)
+
+    if not installed and not os.path.isfile(pkg_json) and not os.path.isfile(req_txt):
+        logger.debug("No dependency manifest found — nothing to install")
+
+    return True
 
 
 def merge_worktree(
@@ -158,21 +231,43 @@ def merge_worktree(
             cwd=worktree_path, check=False,
         )
 
+    # Ensure the main repo working tree is clean before merge.
+    # A prior failed merge or abort can leave dirty state that blocks checkout.
+    _run_git(["checkout", "."], cwd=repo_path, check=False)
+    _run_git(["clean", "-fd"], cwd=repo_path, check=False)
+
     # Merge the worktree branch into the target branch (from main repo)
     try:
         _run_git(["checkout", target_branch], cwd=repo_path)
+
+        merge_msg = f"forge: merge {branch}"
         result = _run_git(
-            ["merge", "--no-ff", branch, "-m", f"forge: merge {branch}"],
+            ["merge", "--no-ff", branch, "-m", merge_msg],
             cwd=repo_path, check=False,
         )
-        if result.returncode != 0:
-            logger.error("Merge conflict for %s: %s", branch, result.stderr)
-            # Abort the merge
-            _run_git(["merge", "--abort"], cwd=repo_path, check=False)
-            return False
 
-        logger.info("Merged %s into %s", branch, target_branch)
-        return True
+        if result.returncode == 0:
+            logger.info("Merged %s into %s", branch, target_branch)
+            return True
+
+        # Merge had conflicts — try auto-resolving in favor of the coder's changes.
+        # -X theirs keeps non-conflicting changes from both sides but resolves
+        # conflicting hunks using the incoming (coder's) branch.
+        logger.warning("Merge conflict for %s, retrying with -X theirs", branch)
+        _run_git(["merge", "--abort"], cwd=repo_path, check=False)
+
+        result = _run_git(
+            ["merge", "--no-ff", "-X", "theirs", branch, "-m", merge_msg],
+            cwd=repo_path, check=False,
+        )
+        if result.returncode == 0:
+            logger.info("Auto-resolved merge for %s into %s", branch, target_branch)
+            return True
+
+        logger.error("Merge conflict for %s (even with -X theirs): %s",
+                      branch, result.stderr)
+        _run_git(["merge", "--abort"], cwd=repo_path, check=False)
+        return False
 
     except subprocess.CalledProcessError as e:
         logger.error("Merge failed for %s: %s", branch, e.stderr)

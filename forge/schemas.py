@@ -11,7 +11,7 @@ from enum import Enum
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # ── Enums ─────────────────────────────────────────────────────────────
@@ -354,11 +354,18 @@ class CoderFixResult(BaseModel):
 # ── Agent 9: Test Generator ──────────────────────────────────────────
 
 
+class TestFileContent(BaseModel):
+    """A test file with its path and content, for inline generation."""
+    path: str
+    content: str
+
+
 class TestGeneratorResult(BaseModel):
     """Output of Agent 9: Test Generator."""
 
     finding_id: str
     test_files_created: list[str] = Field(default_factory=list)
+    test_file_contents: list[TestFileContent] = Field(default_factory=list)
     tests_written: int = 0
     tests_passing: int = 0
     coverage_summary: str = ""
@@ -378,6 +385,23 @@ class ForgeCodeReviewResult(BaseModel):
     suggestions: list[str] = Field(default_factory=list)
     regression_risk: str = "LOW"  # LOW | MEDIUM | HIGH
 
+    @field_validator("issues", "suggestions", mode="before")
+    @classmethod
+    def _normalize_string_lists(cls, v: list) -> list[str]:
+        """Accept dicts or strings — LLMs often return structured objects."""
+        result = []
+        for item in v:
+            if isinstance(item, str):
+                result.append(item)
+            elif isinstance(item, dict):
+                # Extract the most informative field
+                desc = item.get("description", item.get("text", item.get("suggestion", "")))
+                cat = item.get("category", "")
+                result.append(f"[{cat}] {desc}" if cat and desc else desc or str(item))
+            else:
+                result.append(str(item))
+        return result
+
 
 # ── Agent 11: Integration Validator ───────────────────────────────────
 
@@ -393,8 +417,23 @@ class IntegrationValidationResult(BaseModel):
     new_issues_introduced: list[str] = Field(default_factory=list)
     summary: str = ""
 
+    @field_validator("regressions_detected", "new_issues_introduced", mode="before")
+    @classmethod
+    def _normalize_string_lists(cls, v: list) -> list[str]:
+        """Accept dicts or strings — LLMs often return structured objects."""
+        return [item if isinstance(item, str) else str(item.get("description", item)) if isinstance(item, dict) else str(item) for item in v]
+
 
 # ── Agent 12: Debt Tracker & Report Generator ─────────────────────────
+
+
+class Recommendation(BaseModel):
+    """A single actionable recommendation for production readiness."""
+
+    priority: int = Field(default=1, ge=1)
+    title: str
+    description: str = ""
+    impact: str = "medium"  # critical | high | medium | low
 
 
 class DebtEntry(BaseModel):
@@ -430,8 +469,49 @@ class ProductionReadinessReport(BaseModel):
     findings_deferred: int = 0
     debt_items: list[DebtEntry] = Field(default_factory=list)
     summary: str = ""
-    recommendations: list[str] = Field(default_factory=list)
+    recommendations: list[Recommendation] = Field(default_factory=list)
     investor_summary: str = ""
+
+    @field_validator("recommendations", mode="before")
+    @classmethod
+    def _normalize_recommendations(cls, v: list) -> list[dict]:
+        """Accept plain strings, dicts, or Recommendation objects."""
+        normalized = []
+        for i, item in enumerate(v):
+            if isinstance(item, str):
+                normalized.append({"priority": i + 1, "title": item})
+            elif isinstance(item, dict):
+                # Ensure priority has a default
+                if "priority" not in item:
+                    item["priority"] = i + 1
+                normalized.append(item)
+            else:
+                # Already a Recommendation instance
+                normalized.append(item)
+        return normalized
+
+
+# ── Convergence Loop ────────────────────────────────────────────────
+
+
+class ConvergenceIterationRecord(BaseModel):
+    """Record of a single convergence loop iteration."""
+    iteration: int
+    score_before: int = 0
+    score_after: int = 0
+    findings_total: int = 0
+    findings_new: int = 0
+    findings_fixed: int = 0
+    findings_deferred: int = 0
+    low_categories: list[str] = Field(default_factory=list)
+
+
+class ConvergenceResult(BaseModel):
+    """Output of the convergence loop."""
+    converged: bool = False
+    final_score: int = 0
+    iterations_run: int = 0
+    iteration_records: list[ConvergenceIterationRecord] = Field(default_factory=list)
 
 
 # ── Control Loop State ────────────────────────────────────────────────
@@ -459,6 +539,16 @@ class EscalationDecision(BaseModel):
     split_items: list[RemediationItem] = Field(default_factory=list)
 
 
+class DeferredFindingContext(BaseModel):
+    """Failure context for a deferred finding — flows through convergence loop."""
+
+    finding_id: str
+    attempts: int = 0
+    test_output: str = ""  # last test failure excerpt
+    review_feedback: str = ""  # accumulated reviewer feedback
+    escalation_reason: str = ""  # why it was deferred
+
+
 class OuterLoopState(BaseModel):
     """Tracks the outer re-planning loop."""
 
@@ -467,6 +557,7 @@ class OuterLoopState(BaseModel):
     remaining_plan: RemediationPlan | None = None
     completed_fixes: list[CoderFixResult] = Field(default_factory=list)
     deferred_findings: list[str] = Field(default_factory=list)
+    deferred_context: dict[str, DeferredFindingContext] = Field(default_factory=dict)
     escalations: list[EscalationDecision] = Field(default_factory=list)
 
 
@@ -509,6 +600,12 @@ class ForgeExecutionState(BaseModel):
     estimated_cost_usd: float = 0.0
     success: bool = False
 
+    # Convergence state
+    convergence_iteration: int = 0
+    convergence_records: list[ConvergenceIterationRecord] = Field(default_factory=list)
+    prior_iteration_findings: list[AuditFinding] = Field(default_factory=list)
+    files_changed_this_run: list[str] = Field(default_factory=list)
+
 
 class ForgeResult(BaseModel):
     """Final output of a FORGE run."""
@@ -526,3 +623,4 @@ class ForgeResult(BaseModel):
     agent_invocations: int = 0
     cost_usd: float = 0.0
     duration_seconds: float = 0.0
+    convergence_iterations: int = 0

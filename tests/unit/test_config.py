@@ -42,7 +42,7 @@ class TestForgeConfig:
 
     def test_model_for_unknown_role(self):
         cfg = ForgeConfig()
-        # Unknown role falls back to "minimax/minimax-m2.5" (default return)
+        # Unknown role falls back to first default model value
         assert cfg.model_for_role("nonexistent") == "minimax/minimax-m2.5"
 
     def test_provider_for_role(self):

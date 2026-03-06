@@ -154,7 +154,7 @@ class TestGenerateReports:
         assert data["overall_score"] == 85
         assert data["findings_fixed"] == 5
         assert data["summary"] == "All fixed"
-        assert "Deploy!" in data["recommendations"]
+        assert data["recommendations"][0]["title"] == "Deploy!"
 
     def test_html_contains_debt_table(self, tmp_path):
         report = ProductionReadinessReport(

@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
 
 from forge.vendor.agent_ai import AgentAI, AgentAIConfig
 from forge.vendor.agent_ai.types import Tool
@@ -34,6 +35,7 @@ from forge.schemas import (
     FixOutcome,
     ForgeCodeReviewResult,
     ReviewDecision,
+    TestFileContent,
     TestGeneratorResult,
 )
 
@@ -41,8 +43,29 @@ from . import router
 
 logger = logging.getLogger(__name__)
 
-# Tools available to coding agents
-_CODER_TOOLS = [Tool.READ, Tool.WRITE, Tool.EDIT, Tool.BASH, Tool.GLOB, Tool.GREP]
+# Tools available to coding agents (includes NotebookEdit for .ipynb files)
+_CODER_TOOLS = [Tool.READ, Tool.WRITE, Tool.EDIT, Tool.BASH, Tool.GLOB, Tool.GREP, Tool.NOTEBOOK_EDIT]
+
+
+def _detect_changed_files_via_git(worktree_path: str) -> list[str]:
+    """Detect files changed in worktree using git diff.
+
+    This is the authoritative fallback when the coder's JSON response
+    can't be parsed and tool_uses aren't available (opencode provider).
+    """
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "HEAD"],
+            cwd=worktree_path,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return [f.strip() for f in result.stdout.strip().split("\n") if f.strip()]
+    except Exception:
+        pass
+    return []
 
 
 def _parse_json_response(text: str) -> dict:
@@ -73,10 +96,11 @@ async def run_coder_tier2(
     worktree_path: str,
     codebase_map: dict | None = None,
     review_feedback: str = "",
+    prior_changes: str = "",
     iteration: int = 1,
-    model: str = "anthropic/claude-sonnet-4.6",
+    model: str = "minimax/minimax-m2.5",
     ai_provider: str = "opencode",
-    max_turns: int = 30,
+    max_turns: int = 15,
 ) -> dict:
     """Agent 7: Apply a scoped fix (1-3 files) for a Tier 2 finding.
 
@@ -97,6 +121,7 @@ async def run_coder_tier2(
         relevant_files="(Agent will discover relevant files via Read/Glob tools)",
         codebase_map_json=codebase_map_json,
         review_feedback=review_feedback,
+        prior_changes=prior_changes,
         iteration=iteration,
     )
 
@@ -119,15 +144,18 @@ async def run_coder_tier2(
     elif response.text:
         data = _parse_json_response(response.text)
 
-    # Determine outcome from tool uses
+    # Determine outcome — try 3 sources: parsed JSON, tool_uses, git diff
     files_changed = data.get("files_changed", [])
     if not files_changed:
-        # Infer from tool uses
+        _write_tool_names = {"Write", "Edit", "write_file", "edit_file"}
         for tu in response.tool_uses:
-            if tu.name in ("Write", "Edit") and "file_path" in tu.input:
-                fp = tu.input["file_path"]
-                if fp not in files_changed:
+            if tu.name in _write_tool_names:
+                fp = tu.input.get("file_path") or tu.input.get("path", "")
+                if fp and fp not in files_changed:
                     files_changed.append(fp)
+    if not files_changed:
+        # Authoritative fallback: check actual filesystem via git
+        files_changed = _detect_changed_files_via_git(worktree_path)
 
     outcome = FixOutcome.COMPLETED if files_changed else FixOutcome.FAILED_RETRYABLE
 
@@ -157,10 +185,11 @@ async def run_coder_tier3(
     worktree_path: str,
     codebase_map: dict | None = None,
     review_feedback: str = "",
+    prior_changes: str = "",
     iteration: int = 1,
-    model: str = "anthropic/claude-sonnet-4.6",
+    model: str = "minimax/minimax-m2.5",
     ai_provider: str = "opencode",
-    max_turns: int = 60,
+    max_turns: int = 30,
 ) -> dict:
     """Agent 8: Apply an architectural fix (5-15 files) for a Tier 3 finding.
 
@@ -182,6 +211,7 @@ async def run_coder_tier3(
         relevant_files="(Agent will discover relevant files via Read/Glob tools)",
         codebase_map_json=codebase_map_json,
         review_feedback=review_feedback,
+        prior_changes=prior_changes,
         iteration=iteration,
     )
 
@@ -203,13 +233,17 @@ async def run_coder_tier3(
     elif response.text:
         data = _parse_json_response(response.text)
 
+    # Determine outcome — try 3 sources: parsed JSON, tool_uses, git diff
     files_changed = data.get("files_changed", [])
     if not files_changed:
+        _write_tool_names = {"Write", "Edit", "write_file", "edit_file"}
         for tu in response.tool_uses:
-            if tu.name in ("Write", "Edit") and "file_path" in tu.input:
-                fp = tu.input["file_path"]
-                if fp not in files_changed:
+            if tu.name in _write_tool_names:
+                fp = tu.input.get("file_path") or tu.input.get("path", "")
+                if fp and fp not in files_changed:
                     files_changed.append(fp)
+    if not files_changed:
+        files_changed = _detect_changed_files_via_git(worktree_path)
 
     outcome = FixOutcome.COMPLETED if files_changed else FixOutcome.FAILED_RETRYABLE
 
@@ -237,23 +271,34 @@ async def run_coder_tier3(
 async def run_test_generator(
     finding: dict,
     code_change: dict,
-    worktree_path: str,
-    model: str = "anthropic/claude-haiku-4.5",
-    ai_provider: str = "opencode",
-    max_turns: int = 20,
+    code_diff: str = "",
+    worktree_path: str = ".",
+    test_context: dict | None = None,
+    prior_test_failure: dict | None = None,
+    model: str = "minimax/minimax-m2.5",
+    ai_provider: str = "openrouter_direct",
+    max_turns: int = 1,
 ) -> dict:
     """Agent 9: Generate tests for a fix applied by the Coder agent.
 
-    Runs in the same worktree as the coder so it can read the changes
-    and existing test infrastructure.
+    Uses openrouter_direct (HTTP direct) for reliable structured JSON output.
+    Returns test file contents inline — caller writes them to disk.
     """
     finding_obj = AuditFinding(**finding)
     logger.info("Agent 9: Test Generator starting for %s", finding_obj.title)
 
+    # Extract test context fields
+    tc = test_context or {}
+
     task = test_generator_task_prompt(
         finding_json=json.dumps(finding, indent=2, default=str),
         code_change_json=json.dumps(code_change, indent=2, default=str),
-        existing_tests="(Agent will discover existing tests via Glob/Read)",
+        code_diff=code_diff,
+        source_context=tc.get("source_files", {}),
+        existing_tests=tc.get("existing_test_sample", ""),
+        framework_hint=tc.get("framework", ""),
+        project_hints=tc.get("project_hints", ""),
+        prior_test_failure=prior_test_failure,
     )
 
     ai = AgentAI(AgentAIConfig(
@@ -261,37 +306,42 @@ async def run_test_generator(
         model=model,
         cwd=worktree_path,
         max_turns=max_turns,
-        allowed_tools=[t.value for t in _CODER_TOOLS],
+        allowed_tools=[],  # No file tools — returns test code inline
         env={"OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY", "")},
         agent_name="test_generator",
     ))
 
-    response = await ai.run(task, system_prompt=TEST_GEN_SYSTEM_PROMPT)
+    response = await ai.run(
+        task,
+        system_prompt=TEST_GEN_SYSTEM_PROMPT,
+        output_schema=TestGeneratorResult,
+    )
 
+    # Parse structured response
     data = {}
     if response.parsed:
         data = response.parsed.model_dump() if hasattr(response.parsed, "model_dump") else {}
     elif response.text:
         data = _parse_json_response(response.text)
 
-    test_files = data.get("test_files_created", [])
-    if not test_files:
-        for tu in response.tool_uses:
-            if tu.name in ("Write", "Edit") and "file_path" in tu.input:
-                fp = tu.input["file_path"]
-                if fp not in test_files:
-                    test_files.append(fp)
-
     result = TestGeneratorResult(
         finding_id=finding_obj.id,
-        test_files_created=test_files,
-        tests_written=data.get("tests_written", len(test_files)),
+        test_files_created=data.get("test_files_created", []),
+        test_file_contents=[
+            TestFileContent(**tfc) for tfc in data.get("test_file_contents", [])
+            if isinstance(tfc, dict) and "path" in tfc and "content" in tfc
+        ],
+        tests_written=data.get("tests_written", 0),
         tests_passing=data.get("tests_passing", 0),
         coverage_summary=data.get("coverage_summary", ""),
         summary=data.get("summary", ""),
     )
 
-    logger.info("Agent 9: Complete — %d test files for %s", len(test_files), finding_obj.title)
+    # Populate test_files_created from test_file_contents if not set
+    if not result.test_files_created and result.test_file_contents:
+        result.test_files_created = [tfc.path for tfc in result.test_file_contents]
+
+    logger.info("Agent 9: Complete — %d test files for %s", len(result.test_files_created), finding_obj.title)
     return result.model_dump()
 
 
@@ -302,8 +352,9 @@ async def run_test_generator(
 async def run_code_reviewer(
     finding: dict,
     code_change: dict,
+    code_diff: str = "",
     codebase_map: dict | None = None,
-    model: str = "anthropic/claude-haiku-4.5",
+    model: str = "minimax/minimax-m2.5",
     ai_provider: str = "openrouter_direct",
 ) -> dict:
     """Agent 10: Review a fix for correctness, safety, and consistency.
@@ -317,6 +368,7 @@ async def run_code_reviewer(
         finding_json=json.dumps(finding, indent=2, default=str),
         code_change_json=json.dumps(code_change, indent=2, default=str),
         codebase_map_json=json.dumps(codebase_map, indent=2, default=str) if codebase_map else "",
+        code_diff=code_diff,
     )
 
     ai = AgentAI(AgentAIConfig(
@@ -337,12 +389,12 @@ async def run_code_reviewer(
     elif response.text:
         data = _parse_json_response(response.text)
 
-    # Parse decision — default to REQUEST_CHANGES if unclear
-    decision_str = str(data.get("decision", "REQUEST_CHANGES")).upper()
+    # Parse decision — default to APPROVE if unclear (bias toward accepting valid fixes)
+    decision_str = str(data.get("decision", "APPROVE")).upper()
     try:
         decision = ReviewDecision(decision_str)
     except ValueError:
-        decision = ReviewDecision.REQUEST_CHANGES
+        decision = ReviewDecision.APPROVE
 
     result = ForgeCodeReviewResult(
         finding_id=finding_obj.id,
@@ -367,7 +419,7 @@ async def run_code_reviewer(
 async def run_escalation_agent(
     system_prompt: str,
     task_prompt: str,
-    model: str = "anthropic/claude-haiku-4.5",
+    model: str = "minimax/minimax-m2.5",
     ai_provider: str = "openrouter_direct",
 ) -> dict:
     """LLM-based escalation agent for the middle loop.

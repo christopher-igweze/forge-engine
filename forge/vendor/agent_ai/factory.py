@@ -91,4 +91,22 @@ def build_provider_client(config: "AgentAIConfig") -> ProviderClient:
         )
         return OpenrouterDirectClient(provider_cfg)
 
+    if config.provider == "openrouter_tools":
+        from forge.vendor.agent_ai.providers.openrouter_tools import (
+            OpenrouterToolsClient,
+            OpenrouterToolsConfig,
+        )
+
+        provider_cfg = OpenrouterToolsConfig(
+            model=config.model,
+            system_prompt=config.system_prompt,
+            max_retries=config.max_retries,
+            max_tool_turns=config.max_turns,
+            initial_delay=config.initial_delay,
+            max_delay=config.max_delay,
+            backoff_factor=config.backoff_factor,
+            env=dict(config.env),
+        )
+        return OpenrouterToolsClient(provider_cfg)
+
     raise ValueError(f"Unsupported provider: {config.provider}")

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -72,3 +73,21 @@ def update_pattern_prevalence(
             pattern.times_detected += count
 
     return counts
+
+
+def get_next_pattern_id(library_dir: Path) -> int:
+    """Get the next available VP-NNN pattern ID number.
+
+    Scans both curated/ and proposed/ subdirectories for existing
+    VP-*.yaml files and returns max(existing) + 1.
+    """
+    existing_ids: list[int] = []
+    for subdir in ("curated", "proposed"):
+        pattern_dir = library_dir / subdir
+        if not pattern_dir.is_dir():
+            continue
+        for yaml_path in pattern_dir.glob("VP-*.yaml"):
+            match = re.match(r"VP-(\d+)", yaml_path.stem)
+            if match:
+                existing_ids.append(int(match.group(1)))
+    return max(existing_ids, default=0) + 1

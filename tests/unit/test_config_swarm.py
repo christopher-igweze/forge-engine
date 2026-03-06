@@ -98,7 +98,7 @@ class TestSwarmModelResolution:
     def test_synthesizer_default_model(self):
         cfg = ForgeConfig()
         model = cfg.model_for_role("synthesizer")
-        assert model == "anthropic/claude-sonnet-4.6"
+        assert model == "minimax/minimax-m2.5"
 
     def test_swarm_roles_in_role_mapping(self):
         assert "swarm_worker" in FORGE_ROLE_TO_MODEL_FIELD

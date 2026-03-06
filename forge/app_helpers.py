@@ -103,7 +103,13 @@ def _build_summary(state: ForgeExecutionState) -> str:
         )
 
     if state.completed_fixes:
-        parts.append(f"Fixed: {len(state.completed_fixes)}")
+        from forge.schemas import FixOutcome
+        actually_fixed = [
+            f for f in state.completed_fixes
+            if f.outcome in (FixOutcome.COMPLETED, FixOutcome.COMPLETED_WITH_DEBT)
+        ]
+        if actually_fixed:
+            parts.append(f"Fixed: {len(actually_fixed)}")
 
     if state.outer_loop.deferred_findings:
         parts.append(f"Deferred: {len(state.outer_loop.deferred_findings)}")

@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 MODEL_PRICING: dict[str, tuple[float, float]] = {
     # (input_per_mtok, output_per_mtok)
     "minimax/minimax-m2.5": (0.30, 1.20),
+    "deepseek/deepseek-v3.2": (0.28, 0.40),
     "anthropic/claude-haiku-4.5": (1.00, 5.00),
     "anthropic/claude-sonnet-4.6": (3.00, 15.00),
 }
@@ -99,9 +100,15 @@ class ForgeTelemetry:
     via the ``activate()`` context manager at the pipeline entry point.
     """
 
-    def __init__(self, artifacts_dir: str = "", run_id: str = "") -> None:
+    def __init__(
+        self,
+        artifacts_dir: str = "",
+        run_id: str = "",
+        stream_log_path: str = "",
+    ) -> None:
         self.artifacts_dir = artifacts_dir
         self.run_id = run_id
+        self.stream_log_path = stream_log_path
         self.invocations: list[AgentInvocationLog] = []
         self.training_data: list[TrainingDataEntry] = []
         self._start_time = time.monotonic()
@@ -180,6 +187,17 @@ class ForgeTelemetry:
             "Telemetry: %s | %s | %d+%d tok | $%.6f | %dms",
             agent_name, model, input_tokens, output_tokens, entry.cost_usd, latency_ms,
         )
+
+        # Stream each invocation to disk immediately so costs survive failures
+        if self.stream_log_path:
+            try:
+                row = asdict(entry)
+                row["running_total_usd"] = self.total_cost
+                with open(self.stream_log_path, "a") as f:
+                    f.write(json.dumps(row) + "\n")
+            except OSError:
+                pass  # non-fatal
+
         return entry
 
     def log_training_pair(

@@ -450,7 +450,13 @@ def _render_html(report: ProductionReadinessReport, run_id: str) -> str:
     # Recommendations
     recs_html = ""
     if report.recommendations:
-        recs_items = "".join(f"<li>{_esc(r)}</li>" for r in report.recommendations)
+        recs_items = ""
+        for r in report.recommendations:
+            title = _esc(r.title)
+            if r.description:
+                recs_items += f"<li><strong>{title}</strong> — {_esc(r.description)} <em>({_esc(r.impact)})</em></li>"
+            else:
+                recs_items += f"<li>{title}</li>"
         recs_html = f"<h2>Recommendations</h2><ol>{recs_items}</ol>"
 
     return f"""<!DOCTYPE html>
