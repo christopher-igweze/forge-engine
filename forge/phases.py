@@ -15,6 +15,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from forge.app_helpers import NODE_ID, _filter_execution_levels, _unwrap_to_model
+from forge.execution.events import emit_phase_complete, emit_phase_start
 from forge.schemas import (
     AuditFinding,
     CodebaseMap,
@@ -50,6 +51,7 @@ async def _run_discovery(
     invocations = 0
 
     # Agent 1: Codebase Analyst (always runs first — everything depends on it)
+    emit_phase_start(cfg, "discovery", "Running Agent 1 (Codebase Analyst).")
     logger.info("Discovery: Running Agent 1 (Codebase Analyst)")
     codebase_map_dict = await app.call(
         f"{NODE_ID}.run_codebase_analyst",
@@ -68,8 +70,10 @@ async def _run_discovery(
     else:
         state.codebase_map = unwrapped
     invocations += 1
+    emit_phase_complete(cfg, "codebase_analyst", "Agent 1 (Codebase Analyst) complete.")
 
     # Agents 2, 3, 4: Run in parallel (all depend only on CodebaseMap)
+    emit_phase_start(cfg, "discovery", "Running Agents 2-4 in parallel (Security, Quality, Architecture).")
     logger.info("Discovery: Running Agents 2-4 in parallel")
 
     coros = []
@@ -171,6 +175,10 @@ async def _run_discovery(
         state.quality_findings +
         state.architecture_findings
     )
+    emit_phase_complete(
+        cfg, "discovery",
+        f"Agents 2-4 complete. {len(state.all_findings)} total findings.",
+    )
 
     # Intent analysis (LLM-based reasoning about developer intent)
     if state.all_findings:
@@ -204,6 +212,8 @@ async def _run_discovery(
             apply_actionability(state.all_findings, cfg.project_context)
         except Exception as e:
             logger.warning("Actionability classification failed (non-fatal): %s", e)
+
+    emit_phase_complete(cfg, "intent_analyzer", "Intent analysis complete.")
 
     logger.info(
         "Discovery complete: %d security, %d quality, %d architecture findings",
@@ -383,6 +393,7 @@ async def _run_triage(
         codebase_map_dict = state.codebase_map.model_dump()
 
     # Agent 6: Triage Classifier
+    emit_phase_start(cfg, "triage", "Running Agent 6 (Triage Classifier).")
     logger.info("Triage: Running Agent 6 (Triage Classifier)")
     triage_dict = await app.call(
         f"{NODE_ID}.run_triage_classifier",
@@ -464,6 +475,11 @@ async def _run_triage(
         for finding in state.all_findings:
             if finding.id in tier_map:
                 finding.tier = tier_map[finding.id]
+
+    emit_phase_complete(
+        cfg, "triage",
+        f"Triage complete. {state.remediation_plan.total_items if state.remediation_plan else 0} items in remediation plan.",
+    )
 
     logger.info(
         "Triage complete: %d items in remediation plan",

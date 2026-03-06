@@ -183,8 +183,23 @@ async def run_standalone(
         _build_summary,
     )
 
+    from forge.execution.events import (
+        emit_phase_start,
+        emit_scan_complete,
+        emit_scan_error,
+    )
+
     start_time = time.time()
     cfg = ForgeConfig(**(config or {}))
+
+    # Env-var fallback for webhook config (so callers don't need to pass it)
+    if not cfg.webhook_url:
+        cfg.webhook_url = os.environ.get("FORGE_WEBHOOK_URL", "")
+    if not cfg.webhook_token:
+        cfg.webhook_token = os.environ.get("FORGE_WEBHOOK_TOKEN", "")
+    if not cfg.webhook_scan_id:
+        cfg.webhook_scan_id = os.environ.get("FORGE_WEBHOOK_SCAN_ID", "")
+
     resolved = cfg.resolved_models()
     dispatcher = StandaloneDispatcher()
 
@@ -212,6 +227,7 @@ async def run_standalone(
         os.makedirs(state.artifacts_dir, exist_ok=True)
 
         logger.info("FORGE standalone starting: %s", state.repo_path)
+        emit_phase_start(cfg, "orchestrator", "Starting FORGE discovery scan.")
 
         # Recover stale worktrees
         try:
@@ -295,10 +311,16 @@ async def run_standalone(
 
         clear_checkpoints(state.repo_path)
         state.success = True
+        emit_scan_complete(
+            cfg,
+            f"FORGE scan complete. {len(state.all_findings)} findings.",
+            data={"total_findings": len(state.all_findings)},
+        )
 
     except Exception as e:
         logger.exception("FORGE standalone failed: %s", e)
         state.success = False
+        emit_scan_error(cfg, f"FORGE scan failed: {e}")
     finally:
         try:
             from forge.execution.worktree import cleanup_all_worktrees
