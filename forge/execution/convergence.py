@@ -235,15 +235,36 @@ async def _run_delta_discovery(
     # We pass the changed_files list so auditors focus on those
     changed_files_str = "\n".join(changed_files[:50])  # Cap at 50 to stay in context
 
-    # Build project context with delta scope
+    # Build prior findings context so agents don't re-report known issues
+    changed_set = set(changed_files)
+    prior_on_changed: list[AuditFinding] = []
+    for f in state.all_findings:
+        if f.locations:
+            for loc in f.locations:
+                if loc.file_path in changed_set:
+                    prior_on_changed.append(f)
+                    break
+
+    prior_str = ""
+    if prior_on_changed:
+        lines = [f"  - [{f.severity.value}] {f.title}" for f in prior_on_changed[:30]]
+        prior_str = (
+            "\n## ALREADY REPORTED — DO NOT RE-REPORT\n"
+            "These issues are already tracked. Do NOT report these or variations:\n"
+            + "\n".join(lines) + "\n"
+        )
+
+    # Build project context — scoped to regressions only
     project_context_str = (
-        f"## DELTA SCAN SCOPE\n"
-        f"This is a targeted re-scan of files changed during remediation.\n"
-        f"Focus your analysis ONLY on these files:\n{changed_files_str}\n\n"
-        f"Look specifically for:\n"
-        f"- New issues introduced by the remediation fixes\n"
-        f"- Remaining issues in changed files that were not fully addressed\n"
-        f"- Regressions or side effects from the changes\n"
+        f"## DELTA SCAN — REGRESSIONS ONLY\n"
+        f"Targeted re-scan after remediation fixes were applied.\n"
+        f"Changed files:\n{changed_files_str}\n\n"
+        f"CRITICAL: ONLY report issues INTRODUCED by the changes.\n"
+        f"Do NOT report pre-existing issues in the same files.\n"
+        f"Do NOT report general code quality observations.\n"
+        f"Valid: fix added try/catch but exposes raw exception details.\n"
+        f"Invalid: file was always missing input validation.\n"
+        + prior_str
     )
 
     # Run Agents 2-4 in parallel on changed files
@@ -296,7 +317,32 @@ async def _run_delta_discovery(
                 except Exception as e:
                     logger.warning("Failed to parse delta finding: %s", e)
 
-    logger.info("Delta discovery: found %d new findings", len(new_findings))
+    logger.info("Delta discovery: found %d raw findings", len(new_findings))
+
+    # Post-filter: remove findings that match prior issues (not regressions)
+    ref_findings = state.prior_iteration_findings or state.all_findings
+    if ref_findings and new_findings:
+        prior_titles = {f.title.lower().strip() for f in ref_findings}
+        prior_prefixes = {" ".join(t.split()[:5]) for t in prior_titles}
+
+        filtered = []
+        for f in new_findings:
+            t = f.title.lower().strip()
+            prefix = " ".join(t.split()[:5])
+            if t in prior_titles:
+                logger.info("Delta filter: exact dup '%s'", f.title)
+                continue
+            if prefix in prior_prefixes:
+                logger.info("Delta filter: variant '%s'", f.title)
+                continue
+            filtered.append(f)
+
+        logger.info(
+            "Delta discovery: %d raw → %d after regression filter",
+            len(new_findings), len(filtered),
+        )
+        new_findings = filtered
+
     return new_findings
 
 
