@@ -7,6 +7,9 @@ of polling the sandbox for logs.
 All functions are best-effort: if the webhook is unreachable or the
 request fails, the scan continues unaffected.  Only stdlib is used
 (no ``requests`` or ``httpx`` dependency).
+
+Events are dispatched on a background thread so network latency and
+timeouts never block the scan pipeline.
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ import hashlib
 import hmac
 import json
 import logging
+import threading
 import urllib.request
 from typing import TYPE_CHECKING
 
@@ -27,6 +31,31 @@ logger = logging.getLogger(__name__)
 # ── Core emitter ─────────────────────────────────────────────────────
 
 
+def _send_webhook(
+    url: str,
+    body: bytes,
+    signature: str,
+) -> None:
+    """Synchronous HTTP POST — runs on a background thread."""
+    try:
+        req = urllib.request.Request(
+            url,
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "X-Forge-Signature": f"sha256={signature}",
+            },
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=3)  # noqa: S310
+    except Exception:
+        logger.warning(
+            "Webhook POST failed (non-fatal): %s",
+            url,
+            exc_info=True,
+        )
+
+
 def emit_event(
     cfg: ForgeConfig,
     event_type: str,
@@ -37,8 +66,8 @@ def emit_event(
 ) -> None:
     """POST a signed JSON event to the configured webhook endpoint.
 
-    No-op when ``cfg.webhook_url`` is empty.  Catches *all* exceptions
-    so a webhook failure can never crash or slow down the scan.
+    No-op when ``cfg.webhook_url`` is empty.  Dispatches the HTTP
+    request on a daemon thread so it never blocks the scan pipeline.
     """
     if not cfg.webhook_url:
         return
@@ -61,21 +90,16 @@ def emit_event(
             hashlib.sha256,
         ).hexdigest()
 
-        req = urllib.request.Request(
-            cfg.webhook_url,
-            data=body,
-            headers={
-                "Content-Type": "application/json",
-                "X-Forge-Signature": f"sha256={signature}",
-            },
-            method="POST",
+        thread = threading.Thread(
+            target=_send_webhook,
+            args=(cfg.webhook_url, body, signature),
+            daemon=True,
         )
-
-        urllib.request.urlopen(req, timeout=5)  # noqa: S310
+        thread.start()
 
     except Exception:
         logger.warning(
-            "Webhook emit failed (non-fatal): event_type=%s agent=%s",
+            "Webhook emit setup failed (non-fatal): event_type=%s agent=%s",
             event_type,
             agent,
             exc_info=True,
