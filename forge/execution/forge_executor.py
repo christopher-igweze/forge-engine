@@ -502,6 +502,27 @@ async def run_inner_loop(
         else:
             test_exec = None
 
+        # ── Step 2c: Regression check — run existing test suite ──────
+        regression_failed = False
+        if cfg.enable_regression_check:
+            try:
+                from forge.execution.test_runner import detect_test_framework, run_tests_in_worktree
+                if detect_test_framework(worktree_path):
+                    regression_exec = run_tests_in_worktree(
+                        worktree_path, test_files=None, timeout=cfg.regression_test_timeout,
+                    )
+                    if regression_exec and not regression_exec.success:
+                        regression_class = _classify_test_failure(regression_exec)
+                        if regression_class == "code_bug":
+                            logger.warning("Regression: existing tests failing for %s", finding.title)
+                            regression_failed = True
+                            loop_state.regression_summary = (
+                                f"Fix regresses existing tests ({regression_exec.tests_failed}/"
+                                f"{regression_exec.tests_run} failed): {regression_exec.error_output[:300]}"
+                            )
+            except Exception as e:
+                logger.warning("Regression check failed (non-fatal): %s", e)
+
         # Parse review result
         if isinstance(review_raw, Exception):
             logger.error("Code reviewer failed: %s", review_raw)
@@ -566,6 +587,12 @@ async def run_inner_loop(
                         logger.info("Inner loop: retried tests still broken (%s) — preserving review decision", retry_class)
                 else:
                     logger.info("Inner loop: test retry returned no exec result — preserving review decision")
+
+        # Regression check override: if existing tests fail, override APPROVE
+        if regression_failed and loop_state.review_result.decision == ReviewDecision.APPROVE:
+            loop_state.review_result.decision = ReviewDecision.REQUEST_CHANGES
+            loop_state.review_result.summary = loop_state.regression_summary or "Fix regresses existing tests"
+            logger.info("Inner loop: overriding APPROVE → REQUEST_CHANGES (regression)")
 
         if loop_state.review_result.decision == ReviewDecision.APPROVE:
             coder_result.outcome = FixOutcome.COMPLETED
