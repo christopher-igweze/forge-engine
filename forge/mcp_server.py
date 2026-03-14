@@ -60,6 +60,11 @@ async def forge_scan(path: str, model: str | None = None) -> dict:
 
     repo_path = _resolve_path(path)
 
+    # mode="discovery" already skips remediation/validation phases in
+    # run_standalone (only runs _run_discovery + _run_triage).  dry_run=True
+    # is a safety belt — run_standalone gates remediation on
+    # `cfg.mode in (FULL, REMEDIATION) and not cfg.dry_run`, so both flags
+    # must be wrong for fixes to be applied accidentally.
     config: dict = {
         "mode": "discovery",
         "dry_run": True,
