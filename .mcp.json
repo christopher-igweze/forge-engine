@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "forge": {
-      "command": "uvx",
-      "args": ["--from", "vibe2prod", "python", "-m", "forge.mcp_server"]
+      "command": "python",
+      "args": ["-m", "forge.mcp_server"]
     }
   }
 }
