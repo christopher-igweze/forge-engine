@@ -197,6 +197,19 @@ class TestSweafResultMapping:
         mapped = sweaf_result_to_coder_fix_results(result, findings)
         assert mapped[0].outcome == FixOutcome.COMPLETED_WITH_DEBT
 
+    def test_failed_maps_to_failed_retryable(self):
+        result = {
+            "issues": {
+                "fix-f-001": {"status": "failed", "summary": "Could not fix"},
+            },
+        }
+        findings = {"F-001": _make_finding()}
+
+        mapped = sweaf_result_to_coder_fix_results(result, findings)
+        assert len(mapped) == 1
+        assert mapped[0].outcome == FixOutcome.FAILED_RETRYABLE
+        assert mapped[0].finding_id == "F-001"
+
 
 class TestWriteIssueFiles:
     def test_writes_correct_content(self, tmp_path):
