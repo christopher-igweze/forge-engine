@@ -925,6 +925,9 @@ async def _execute_single_fix(
     with parallel fixes.
     """
     from forge.execution.worktree import (
+        MERGE_CLEAN,
+        MERGE_DEBT,
+        MERGE_FAILED,
         create_worktree,
         merge_worktree,
         remove_worktree,
@@ -982,7 +985,9 @@ async def _execute_single_fix(
                     worktree_path,
                     target_branch=get_current_branch(state.repo_path),
                 )
-                if merged:
+                if merged == MERGE_DEBT:
+                    inner_state.coder_result.outcome = FixOutcome.COMPLETED_WITH_DEBT
+                if merged != MERGE_FAILED:
                     # Record completion in shared context
                     if broker:
                         import subprocess as sp
@@ -1032,7 +1037,9 @@ async def _execute_single_fix(
                         worktree_path,
                         target_branch=get_current_branch(state.repo_path),
                     )
-                    if not merged:
+                    if merged == MERGE_FAILED:
+                        new_inner.coder_result.outcome = FixOutcome.COMPLETED_WITH_DEBT
+                    elif merged == MERGE_DEBT:
                         new_inner.coder_result.outcome = FixOutcome.COMPLETED_WITH_DEBT
                 state.completed_fixes.append(new_inner.coder_result)
             else:
@@ -1064,7 +1071,9 @@ async def _execute_single_fix(
                     if worktree_path != state.repo_path:
                         merged = merge_worktree(state.repo_path, worktree_path,
                             target_branch=get_current_branch(state.repo_path))
-                        if not merged:
+                        if merged == MERGE_FAILED:
+                            split_inner.coder_result.outcome = FixOutcome.COMPLETED_WITH_DEBT
+                        elif merged == MERGE_DEBT:
                             split_inner.coder_result.outcome = FixOutcome.COMPLETED_WITH_DEBT
                     state.completed_fixes.append(split_inner.coder_result)
                 else:

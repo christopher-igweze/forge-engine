@@ -122,7 +122,7 @@ class TestSplitEscalation:
         # Patch at the module where _execute_single_fix imports from
         with patch(f"{_WORKTREE}.create_worktree", return_value="/tmp/test-repo"), \
              patch(f"{_WORKTREE}.remove_worktree"), \
-             patch(f"{_WORKTREE}.merge_worktree", return_value=True), \
+             patch(f"{_WORKTREE}.merge_worktree", return_value="clean"), \
              patch(f"{_WORKTREE}.get_current_branch", return_value="main"), \
              patch("forge.execution.forge_executor.run_inner_loop") as mock_inner, \
              patch("forge.execution.forge_executor.run_middle_loop", return_value=split_decision):

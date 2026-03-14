@@ -24,6 +24,11 @@ logger = logging.getLogger(__name__)
 # Where worktrees live relative to the repo root
 WORKTREE_DIR = ".forge-worktrees"
 
+# merge_worktree return constants
+MERGE_CLEAN = "clean"
+MERGE_DEBT = "debt"
+MERGE_FAILED = "failed"
+
 
 def _run_git(
     args: list[str],
@@ -197,7 +202,7 @@ def merge_worktree(
     repo_path: str,
     worktree_path: str,
     target_branch: str = "main",
-) -> bool:
+) -> str:
     """Merge a worktree's branch back into the target branch.
 
     Args:
@@ -206,7 +211,8 @@ def merge_worktree(
         target_branch: Branch to merge into.
 
     Returns:
-        True if merge succeeded, False otherwise.
+        MERGE_CLEAN if merge succeeded cleanly, MERGE_DEBT if -X theirs
+        fallback was used, MERGE_FAILED if merge could not be completed.
     """
     # Get the branch name of the worktree
     result = _run_git(
@@ -215,12 +221,12 @@ def merge_worktree(
     )
     if result.returncode != 0:
         logger.error("Could not determine worktree branch: %s", result.stderr)
-        return False
+        return MERGE_FAILED
 
     branch = result.stdout.strip()
     if not branch or branch == "HEAD":
         logger.error("Worktree has detached HEAD — cannot merge")
-        return False
+        return MERGE_FAILED
 
     # Commit any uncommitted changes in the worktree
     status = _run_git(["status", "--porcelain"], cwd=worktree_path, check=False)
@@ -248,7 +254,7 @@ def merge_worktree(
 
         if result.returncode == 0:
             logger.info("Merged %s into %s", branch, target_branch)
-            return True
+            return MERGE_CLEAN
 
         # Merge had conflicts — try rebase-first strategy to preserve both sides.
         # Step 1: Abort the failed merge
@@ -270,7 +276,7 @@ def merge_worktree(
             )
             if retry_result.returncode == 0:
                 logger.info("Rebase-then-merge succeeded for %s into %s", branch, target_branch)
-                return True
+                return MERGE_CLEAN
             logger.warning("Merge still failed after rebase for %s", branch)
             _run_git(["merge", "--abort"], cwd=repo_path, check=False)
         else:
@@ -286,16 +292,16 @@ def merge_worktree(
         )
         if result.returncode == 0:
             logger.warning("Fell back to -X theirs for %s — marking as debt", branch)
-            return "debt"  # Caller should mark as COMPLETED_WITH_DEBT
+            return MERGE_DEBT
 
         logger.error("Merge conflict for %s (even with -X theirs): %s",
                       branch, result.stderr)
         _run_git(["merge", "--abort"], cwd=repo_path, check=False)
-        return False
+        return MERGE_FAILED
 
     except subprocess.CalledProcessError as e:
         logger.error("Merge failed for %s: %s", branch, e.stderr)
-        return False
+        return MERGE_FAILED
 
 
 def remove_worktree(repo_path: str, worktree_path: str) -> None:
