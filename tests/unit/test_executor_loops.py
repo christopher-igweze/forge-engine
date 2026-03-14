@@ -16,7 +16,6 @@ from forge.execution.forge_executor import (
     _execute_single_fix,
     _heuristic_escalation,
     run_inner_loop,
-    run_middle_loop,
 )
 from forge.schemas import (
     AuditFinding,
@@ -72,11 +71,15 @@ def _make_inner_state(fid="F-001", outcome=FixOutcome.FAILED_RETRYABLE):
     )
 
 
+# Patch targets for lazy imports inside forge_executor
+_WORKTREE = "forge.execution.worktree"
+_TEST_RUNNER = "forge.execution.test_runner"
+
+
 class TestSplitEscalation:
     """Bug 1: SPLIT escalation should execute sub-items instead of being dropped."""
 
-    @pytest.mark.asyncio
-    async def test_split_escalation_executes(self):
+    def test_split_escalation_executes(self):
         """SPLIT handler creates synthetic findings and runs inner loop for each."""
         finding = _make_finding()
         item = _make_item()
@@ -105,7 +108,6 @@ class TestSplitEscalation:
             ],
         )
 
-        # Mock inner loop to return completed results
         completed_inner = InnerLoopState(
             finding_id="F-001-split-1",
             coder_result=CoderFixResult(
@@ -116,28 +118,26 @@ class TestSplitEscalation:
         )
 
         app = AsyncMock()
-        with patch("forge.execution.forge_executor.run_inner_loop", return_value=completed_inner) as mock_inner, \
-             patch("forge.execution.forge_executor.run_middle_loop", return_value=split_decision), \
-             patch("forge.execution.forge_executor.create_worktree", return_value="/tmp/test-repo"), \
-             patch("forge.execution.forge_executor.remove_worktree"), \
-             patch("forge.execution.forge_executor.merge_worktree", return_value=True), \
-             patch("forge.execution.forge_executor.get_current_branch", return_value="main"):
 
-            # Make the first inner loop call return FAILED to trigger middle loop
+        # Patch at the module where _execute_single_fix imports from
+        with patch(f"{_WORKTREE}.create_worktree", return_value="/tmp/test-repo"), \
+             patch(f"{_WORKTREE}.remove_worktree"), \
+             patch(f"{_WORKTREE}.merge_worktree", return_value=True), \
+             patch(f"{_WORKTREE}.get_current_branch", return_value="main"), \
+             patch("forge.execution.forge_executor.run_inner_loop") as mock_inner, \
+             patch("forge.execution.forge_executor.run_middle_loop", return_value=split_decision):
+
             failed_inner = _make_inner_state()
             mock_inner.side_effect = [failed_inner, completed_inner, completed_inner]
 
-            await _execute_single_fix(
+            asyncio.run(_execute_single_fix(
                 app, "node", item, finding, state, cfg, cfg.resolved_models(),
-            )
+            ))
 
-        # Parent should be deferred, sub-items should be attempted
         assert "F-001" in state.outer_loop.deferred_findings
-        # At least one sub-item should have been completed
         assert len(state.completed_fixes) >= 1
 
-    @pytest.mark.asyncio
-    async def test_split_defers_failed_sub_items(self):
+    def test_split_defers_failed_sub_items(self):
         """Failed split sub-items should be added to deferred findings."""
         finding = _make_finding()
         item = _make_item()
@@ -162,18 +162,18 @@ class TestSplitEscalation:
         failed_inner = _make_inner_state("F-001-split-1", FixOutcome.FAILED_RETRYABLE)
 
         app = AsyncMock()
-        with patch("forge.execution.forge_executor.run_inner_loop") as mock_inner, \
-             patch("forge.execution.forge_executor.run_middle_loop", return_value=split_decision), \
-             patch("forge.execution.forge_executor.create_worktree", return_value="/tmp/test-repo"), \
-             patch("forge.execution.forge_executor.remove_worktree"), \
-             patch("forge.execution.forge_executor.get_current_branch", return_value="main"):
+        with patch(f"{_WORKTREE}.create_worktree", return_value="/tmp/test-repo"), \
+             patch(f"{_WORKTREE}.remove_worktree"), \
+             patch(f"{_WORKTREE}.get_current_branch", return_value="main"), \
+             patch("forge.execution.forge_executor.run_inner_loop") as mock_inner, \
+             patch("forge.execution.forge_executor.run_middle_loop", return_value=split_decision):
 
             first_inner = _make_inner_state()
             mock_inner.side_effect = [first_inner, failed_inner]
 
-            await _execute_single_fix(
+            asyncio.run(_execute_single_fix(
                 app, "node", item, finding, state, cfg, cfg.resolved_models(),
-            )
+            ))
 
         assert "F-001-split-1" in state.outer_loop.deferred_findings
 
@@ -181,8 +181,7 @@ class TestSplitEscalation:
 class TestRegressionCheck:
     """Bug 2: Regression check should override APPROVE when existing tests fail."""
 
-    @pytest.mark.asyncio
-    async def test_regression_overrides_approve(self):
+    def test_regression_overrides_approve(self):
         """When existing tests fail as code_bug, APPROVE should become REQUEST_CHANGES."""
         finding = _make_finding()
         item = _make_item()
@@ -203,27 +202,24 @@ class TestRegressionCheck:
         )
 
         app = AsyncMock()
-        # Mock coder to return a successful result
         app.call.side_effect = [
-            coder_result.model_dump(),  # coder
-            {"finding_id": "F-001", "test_file_contents": []},  # test gen
-            {"finding_id": "F-001", "decision": "APPROVE", "summary": "LGTM"},  # reviewer
+            coder_result.model_dump(),
+            {"finding_id": "F-001", "test_file_contents": []},
+            {"finding_id": "F-001", "decision": "APPROVE", "summary": "LGTM"},
         ]
 
-        with patch("forge.execution.forge_executor.detect_test_framework", return_value="pytest"), \
-             patch("forge.execution.forge_executor.run_tests_in_worktree", return_value=mock_test_exec), \
+        with patch(f"{_TEST_RUNNER}.detect_test_framework", return_value="pytest"), \
+             patch(f"{_TEST_RUNNER}.run_tests_in_worktree", return_value=mock_test_exec), \
              patch("forge.execution.forge_executor._classify_test_failure", return_value="code_bug"):
 
-            result = await run_inner_loop(
+            result = asyncio.run(run_inner_loop(
                 app, "node", item, finding, "/tmp/repo", None, cfg, cfg.resolved_models(),
-            )
+            ))
 
-        # Review should have been overridden to REQUEST_CHANGES
         assert result.review_result.decision == ReviewDecision.REQUEST_CHANGES
         assert "regress" in result.regression_summary.lower()
 
-    @pytest.mark.asyncio
-    async def test_regression_ignores_environment(self):
+    def test_regression_ignores_environment(self):
         """Environment noise in regression check should not affect decision."""
         finding = _make_finding()
         item = _make_item()
@@ -245,28 +241,26 @@ class TestRegressionCheck:
 
         app = AsyncMock()
         app.call.side_effect = [
-            coder_result.model_dump(),  # coder
-            {"finding_id": "F-001", "test_file_contents": []},  # test gen
-            {"finding_id": "F-001", "decision": "APPROVE", "summary": "LGTM"},  # reviewer
+            coder_result.model_dump(),
+            {"finding_id": "F-001", "test_file_contents": []},
+            {"finding_id": "F-001", "decision": "APPROVE", "summary": "LGTM"},
         ]
 
-        with patch("forge.execution.forge_executor.detect_test_framework", return_value="pytest"), \
-             patch("forge.execution.forge_executor.run_tests_in_worktree", return_value=mock_test_exec), \
+        with patch(f"{_TEST_RUNNER}.detect_test_framework", return_value="pytest"), \
+             patch(f"{_TEST_RUNNER}.run_tests_in_worktree", return_value=mock_test_exec), \
              patch("forge.execution.forge_executor._classify_test_failure", return_value="environment"):
 
-            result = await run_inner_loop(
+            result = asyncio.run(run_inner_loop(
                 app, "node", item, finding, "/tmp/repo", None, cfg, cfg.resolved_models(),
-            )
+            ))
 
-        # APPROVE should be preserved since it's environment noise
         assert result.review_result.decision == ReviewDecision.APPROVE
 
 
 class TestTier3Routing:
     """Tier 3 items should route to SWE-AF when enabled."""
 
-    @pytest.mark.asyncio
-    async def test_tier3_routed_to_sweaf(self):
+    def test_tier3_routed_to_sweaf(self):
         """Tier 3 dispatched to SWE-AF when sweaf_enabled=True."""
         from forge.phases import _run_remediation
 
@@ -285,16 +279,15 @@ class TestTier3Routing:
             finding_id="F-001", outcome=FixOutcome.COMPLETED, summary="SWE-AF fixed",
         )]
 
-        with patch("forge.phases.route_plan_items", return_value=([], [], [_make_item(tier=RemediationTier.TIER_3)])), \
+        with patch("forge.execution.tier_router.route_plan_items", return_value=([], [], [_make_item(tier=RemediationTier.TIER_3)])), \
              patch("forge.execution.sweaf_bridge.execute_tier3_via_sweaf", return_value=sweaf_results) as mock_sweaf:
 
-            result = await _run_remediation(AsyncMock(), state, cfg, resolved)
+            asyncio.run(_run_remediation(AsyncMock(), state, cfg, resolved))
 
         mock_sweaf.assert_called_once()
         assert len(state.completed_fixes) == 1
 
-    @pytest.mark.asyncio
-    async def test_tier3_falls_back(self):
+    def test_tier3_falls_back(self):
         """SWE-AF failure triggers FORGE fallback when sweaf_fallback_to_forge=True."""
         from forge.phases import _run_remediation
 
@@ -312,11 +305,11 @@ class TestTier3Routing:
             sweaf_fallback_to_forge=True,
         )
 
-        with patch("forge.phases.route_plan_items", return_value=([], [], [_make_item(tier=RemediationTier.TIER_3)])), \
+        with patch("forge.execution.tier_router.route_plan_items", return_value=([], [], [_make_item(tier=RemediationTier.TIER_3)])), \
              patch("forge.execution.sweaf_bridge.execute_tier3_via_sweaf", side_effect=RuntimeError("SWE-AF down")), \
              patch("forge.phases._run_tier3_via_forge") as mock_fallback:
 
-            await _run_remediation(AsyncMock(), state, cfg, cfg.resolved_models())
+            asyncio.run(_run_remediation(AsyncMock(), state, cfg, cfg.resolved_models()))
 
         mock_fallback.assert_called_once()
 

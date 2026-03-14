@@ -74,20 +74,16 @@ def _mock_urlopen(responses):
 
 
 class TestSweafBridgeIntegration:
-    @pytest.mark.asyncio
-    async def test_execute_success(self, tmp_path):
-        """Full success flow: POST + poll → completed results."""
+    def test_execute_success(self, tmp_path):
+        """Full success flow: POST + poll -> completed results."""
         finding = _make_finding()
         item = _make_item()
         state = _make_state(str(tmp_path))
         cfg = _make_cfg()
 
         responses = [
-            # POST response
             {"execution_id": "exec-123"},
-            # First poll: still running
             {"status": "running"},
-            # Second poll: completed
             {
                 "status": "completed",
                 "result": {
@@ -105,14 +101,13 @@ class TestSweafBridgeIntegration:
         with patch("forge.execution.sweaf_bridge.urllib.request.urlopen", side_effect=_mock_urlopen(responses)), \
              patch("forge.execution.sweaf_bridge._POLL_INTERVAL", 0.01):
 
-            results = await execute_tier3_via_sweaf([item], [finding], state, cfg)
+            results = asyncio.run(execute_tier3_via_sweaf([item], [finding], state, cfg))
 
         assert len(results) == 1
         assert results[0].outcome == FixOutcome.COMPLETED
         assert results[0].finding_id == "F-001"
 
-    @pytest.mark.asyncio
-    async def test_execute_timeout(self, tmp_path):
+    def test_execute_timeout(self, tmp_path):
         """Timeout should return FAILED_RETRYABLE for all items."""
         finding = _make_finding()
         item = _make_item()
@@ -121,24 +116,23 @@ class TestSweafBridgeIntegration:
             sweaf_enabled=True,
             sweaf_agentfield_url="http://localhost:8080",
             sweaf_api_key="test-key",
-            sweaf_timeout_seconds=0,  # Immediate timeout
+            sweaf_timeout_seconds=0,
         )
 
         responses = [
             {"execution_id": "exec-123"},
-            {"status": "running"},  # Never completes
+            {"status": "running"},
         ]
 
         with patch("forge.execution.sweaf_bridge.urllib.request.urlopen", side_effect=_mock_urlopen(responses)), \
              patch("forge.execution.sweaf_bridge._POLL_INTERVAL", 0.01):
 
-            results = await execute_tier3_via_sweaf([item], [finding], state, cfg)
+            results = asyncio.run(execute_tier3_via_sweaf([item], [finding], state, cfg))
 
         assert len(results) == 1
         assert results[0].outcome == FixOutcome.FAILED_RETRYABLE
 
-    @pytest.mark.asyncio
-    async def test_execute_connection_error(self, tmp_path):
+    def test_execute_connection_error(self, tmp_path):
         """Connection error should return FAILED_RETRYABLE."""
         finding = _make_finding()
         item = _make_item()
@@ -147,15 +141,14 @@ class TestSweafBridgeIntegration:
 
         with patch("forge.execution.sweaf_bridge.urllib.request.urlopen", side_effect=ConnectionError("refused")):
 
-            results = await execute_tier3_via_sweaf([item], [finding], state, cfg)
+            results = asyncio.run(execute_tier3_via_sweaf([item], [finding], state, cfg))
 
         assert len(results) == 1
         assert results[0].outcome == FixOutcome.FAILED_RETRYABLE
         assert "bridge error" in results[0].summary.lower()
 
-    @pytest.mark.asyncio
-    async def test_execute_partial_success(self, tmp_path):
-        """Some issues complete, some fail — mixed results."""
+    def test_execute_partial_success(self, tmp_path):
+        """Some issues complete, some fail -- mixed results."""
         findings = [_make_finding("F-001"), _make_finding("F-002")]
         items = [_make_item("F-001"), _make_item("F-002")]
         state = _make_state(str(tmp_path))
@@ -177,7 +170,7 @@ class TestSweafBridgeIntegration:
         with patch("forge.execution.sweaf_bridge.urllib.request.urlopen", side_effect=_mock_urlopen(responses)), \
              patch("forge.execution.sweaf_bridge._POLL_INTERVAL", 0.01):
 
-            results = await execute_tier3_via_sweaf(items, findings, state, cfg)
+            results = asyncio.run(execute_tier3_via_sweaf(items, findings, state, cfg))
 
         assert len(results) == 2
         outcomes = {r.finding_id: r.outcome for r in results}
