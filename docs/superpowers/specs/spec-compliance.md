@@ -229,7 +229,7 @@ These features were added beyond what the spec required:
 - **JSON parse resilience** (`json_utils.py`): Handles markdown fences, AgentField envelopes, text-wrapped JSON, embedded JSON in prose
 - **Worktree crash recovery** (`recover_worktrees()`): Lock file cleanup, stale worktree detection, automatic startup recovery
 - **LLM escalation agent**: Middle loop uses real LLM agent with heuristic fallback (spec only implied this)
-- **Deployment guide** (`DEPLOYMENT.md`): Full ops documentation including macOS opencode workaround
+- **Deployment guide** (`docs/deployment.md`): Full ops documentation including macOS opencode workaround
 - **Live E2E test harness**: 15 tests (12 classic + 3 hive) gated behind `--run-live` for real infrastructure validation
 - **Hive Discovery swarm mode** (`forge/swarm/`): Three-layer architecture — deterministic code graph (Layer 0 via `forge/graph/builder.py`) + parallel swarm workers per segment (Layer 1) + single Sonnet 4.6 synthesis (Layer 2). Feature flag: `config.discovery_mode = "swarm" | "classic"`
 - **LLM output normalization**: Category aliases (`_CATEGORY_ALIASES` maps LLM variants like `code_patterns` → `quality`, `error_handling` → `reliability`), priority floor clamping (< 1 → 1), dependency field coercion (list → string). Applied at all 4 parsing sites
