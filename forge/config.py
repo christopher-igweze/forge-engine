@@ -138,6 +138,22 @@ class ForgeConfig(BaseModel):
     webhook_token: str = ""     # HMAC-SHA256 signing secret
     webhook_scan_id: str = ""   # Scan ID included in every event payload
 
+    # ── Regression Check ─────────────────────────────────────────────
+    enable_regression_check: bool = True
+    regression_test_timeout: int = 180  # seconds for full suite run
+
+    # ── SWE-AF Integration (Tier 3) ──────────────────────────────────
+    sweaf_enabled: bool = False
+    sweaf_agentfield_url: str = ""
+    sweaf_api_key: str = ""
+    sweaf_node_id: str = "swe-planner"
+    sweaf_max_coding_iterations: int = 3
+    sweaf_max_concurrent_issues: int = 3
+    sweaf_runtime: Literal["claude_code", "open_code"] = "claude_code"
+    sweaf_timeout_seconds: int = 1800  # 30 min per Tier 3 batch
+    sweaf_fallback_to_forge: bool = True
+    sweaf_max_cost_usd: float = 10.0
+
     # ── Convergence Loop ─────────────────────────────────────────────
     convergence_enabled: bool = True
     convergence_target_score: int = 95
