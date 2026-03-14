@@ -527,6 +527,7 @@ class InnerLoopState(BaseModel):
     review_result: ForgeCodeReviewResult | None = None
     test_result: TestGeneratorResult | None = None
     review_feedback: str = ""
+    regression_summary: str = ""
 
 
 class EscalationDecision(BaseModel):

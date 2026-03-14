@@ -86,7 +86,7 @@ def _review_reject(fid):
 # Patch worktree functions at the source module since _execute_single_fix
 # uses a local import from forge.execution.worktree.
 @patch("forge.execution.worktree.create_worktree", return_value="/tmp/test-worktree")
-@patch("forge.execution.worktree.merge_worktree", return_value=True)
+@patch("forge.execution.worktree.merge_worktree", return_value="clean")
 @patch("forge.execution.worktree.remove_worktree")
 @patch("forge.execution.worktree.get_current_branch", return_value="main")
 class TestExecuteRemediation:

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "forge": {
+      "command": "python",
+      "args": ["-m", "forge.mcp_server"]
+    }
+  }
+}

@@ -502,6 +502,27 @@ async def run_inner_loop(
         else:
             test_exec = None
 
+        # ── Step 2c: Regression check — run existing test suite ──────
+        regression_failed = False
+        if cfg.enable_regression_check:
+            try:
+                from forge.execution.test_runner import detect_test_framework, run_tests_in_worktree
+                if detect_test_framework(worktree_path):
+                    regression_exec = run_tests_in_worktree(
+                        worktree_path, test_files=None, timeout=cfg.regression_test_timeout,
+                    )
+                    if regression_exec and not regression_exec.success:
+                        regression_class = _classify_test_failure(regression_exec)
+                        if regression_class == "code_bug":
+                            logger.warning("Regression: existing tests failing for %s", finding.title)
+                            regression_failed = True
+                            loop_state.regression_summary = (
+                                f"Fix regresses existing tests ({regression_exec.tests_failed}/"
+                                f"{regression_exec.tests_run} failed): {regression_exec.error_output[:300]}"
+                            )
+            except Exception as e:
+                logger.warning("Regression check failed (non-fatal): %s", e)
+
         # Parse review result
         if isinstance(review_raw, Exception):
             logger.error("Code reviewer failed: %s", review_raw)
@@ -566,6 +587,12 @@ async def run_inner_loop(
                         logger.info("Inner loop: retried tests still broken (%s) — preserving review decision", retry_class)
                 else:
                     logger.info("Inner loop: test retry returned no exec result — preserving review decision")
+
+        # Regression check override: if existing tests fail, override APPROVE
+        if regression_failed and loop_state.review_result.decision == ReviewDecision.APPROVE:
+            loop_state.review_result.decision = ReviewDecision.REQUEST_CHANGES
+            loop_state.review_result.summary = loop_state.regression_summary or "Fix regresses existing tests"
+            logger.info("Inner loop: overriding APPROVE → REQUEST_CHANGES (regression)")
 
         if loop_state.review_result.decision == ReviewDecision.APPROVE:
             coder_result.outcome = FixOutcome.COMPLETED
@@ -898,6 +925,9 @@ async def _execute_single_fix(
     with parallel fixes.
     """
     from forge.execution.worktree import (
+        MERGE_CLEAN,
+        MERGE_DEBT,
+        MERGE_FAILED,
         create_worktree,
         merge_worktree,
         remove_worktree,
@@ -955,7 +985,9 @@ async def _execute_single_fix(
                     worktree_path,
                     target_branch=get_current_branch(state.repo_path),
                 )
-                if merged:
+                if merged == MERGE_DEBT:
+                    inner_state.coder_result.outcome = FixOutcome.COMPLETED_WITH_DEBT
+                if merged != MERGE_FAILED:
                     # Record completion in shared context
                     if broker:
                         import subprocess as sp
@@ -1005,12 +1037,50 @@ async def _execute_single_fix(
                         worktree_path,
                         target_branch=get_current_branch(state.repo_path),
                     )
-                    if not merged:
+                    if merged == MERGE_FAILED:
+                        new_inner.coder_result.outcome = FixOutcome.COMPLETED_WITH_DEBT
+                    elif merged == MERGE_DEBT:
                         new_inner.coder_result.outcome = FixOutcome.COMPLETED_WITH_DEBT
                 state.completed_fixes.append(new_inner.coder_result)
             else:
                 state.outer_loop.deferred_findings.append(finding.id)
                 _store_deferral_context(state, finding.id, new_inner, escalation)
+
+        elif escalation.action == EscalationAction.SPLIT and escalation.split_items:
+            logger.info("Middle loop: SPLIT %s into %d sub-items", finding.id, len(escalation.split_items))
+            for split_item in escalation.split_items:
+                # Create synthetic finding inheriting parent's metadata
+                split_finding = AuditFinding(
+                    id=split_item.finding_id,
+                    title=split_item.title,
+                    description=finding.description,
+                    category=finding.category,
+                    severity=finding.severity,
+                    locations=finding.locations,
+                    suggested_fix=finding.suggested_fix,
+                    data_flow=finding.data_flow,
+                    cwe_id=finding.cwe_id,
+                    owasp_ref=finding.owasp_ref,
+                )
+                split_inner = await run_inner_loop(
+                    app, node_id, split_item, split_finding,
+                    worktree_path, codebase_map, cfg, resolved_models,
+                    prior_changes=prior_changes,
+                )
+                if split_inner.coder_result and split_inner.coder_result.outcome == FixOutcome.COMPLETED:
+                    if worktree_path != state.repo_path:
+                        merged = merge_worktree(state.repo_path, worktree_path,
+                            target_branch=get_current_branch(state.repo_path))
+                        if merged == MERGE_FAILED:
+                            split_inner.coder_result.outcome = FixOutcome.COMPLETED_WITH_DEBT
+                        elif merged == MERGE_DEBT:
+                            split_inner.coder_result.outcome = FixOutcome.COMPLETED_WITH_DEBT
+                    state.completed_fixes.append(split_inner.coder_result)
+                else:
+                    state.outer_loop.deferred_findings.append(split_item.finding_id)
+                    _store_deferral_context(state, split_item.finding_id, split_inner, escalation)
+            # Parent finding was split — track it
+            state.outer_loop.deferred_findings.append(finding.id)
 
         elif escalation.action == EscalationAction.ESCALATE:
             # Will be handled by outer loop
