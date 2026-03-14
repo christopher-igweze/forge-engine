@@ -123,7 +123,7 @@ async def _post_execution(
 
     req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     response = await loop.run_in_executor(None, lambda: urllib.request.urlopen(req, timeout=30))
     body = json.loads(response.read())
 
@@ -144,7 +144,7 @@ async def _poll_execution(
     headers = {"Authorization": f"Bearer {cfg.sweaf_api_key}"}
 
     elapsed = 0
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     while elapsed < cfg.sweaf_timeout_seconds:
         await asyncio.sleep(_POLL_INTERVAL)
