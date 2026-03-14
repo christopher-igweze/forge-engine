@@ -4,13 +4,15 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from forge.mcp_server import (
     forge_findings,
+    forge_fix,
     forge_report,
+    forge_scan,
     mcp,
     _resolve_path,
 )
@@ -129,3 +131,104 @@ class TestForgeFindings:
         result = forge_findings(str(tmp_path))
         assert len(result) == 1
         assert result[0]["id"] == "f1"
+
+
+class TestForgeScan:
+    """Test forge_scan tool with mocked run_standalone."""
+
+    @pytest.mark.asyncio
+    async def test_passes_discovery_config(self, tmp_path):
+        mock_result = MagicMock()
+        mock_result.model_dump.return_value = {"success": True, "total_findings": 3}
+
+        with patch("forge.standalone.run_standalone", new_callable=AsyncMock, return_value=mock_result) as mock_run:
+            result = await forge_scan(str(tmp_path))
+
+        mock_run.assert_called_once()
+        call_kwargs = mock_run.call_args
+        config = call_kwargs.kwargs["config"]
+        assert config["mode"] == "discovery"
+        assert config["dry_run"] is True
+        assert config["repo_path"] == str(tmp_path.resolve())
+        assert "models" not in config
+
+    @pytest.mark.asyncio
+    async def test_model_override(self, tmp_path):
+        mock_result = MagicMock()
+        mock_result.model_dump.return_value = {"success": True}
+
+        with patch("forge.standalone.run_standalone", new_callable=AsyncMock, return_value=mock_result) as mock_run:
+            await forge_scan(str(tmp_path), model="anthropic/claude-haiku-4.5")
+
+        config = mock_run.call_args.kwargs["config"]
+        assert config["models"] == {"default": "anthropic/claude-haiku-4.5"}
+
+    @pytest.mark.asyncio
+    async def test_model_dump_json_mode(self, tmp_path):
+        mock_result = MagicMock()
+        mock_result.model_dump.return_value = {"success": True}
+
+        with patch("forge.standalone.run_standalone", new_callable=AsyncMock, return_value=mock_result):
+            await forge_scan(str(tmp_path))
+
+        mock_result.model_dump.assert_called_once_with(mode="json")
+
+    @pytest.mark.asyncio
+    async def test_bad_path_raises_valueerror(self):
+        with pytest.raises(ValueError, match="is not a directory"):
+            await forge_scan("/nonexistent/path/that/does/not/exist")
+
+
+class TestForgeFix:
+    """Test forge_fix tool with mocked run_standalone."""
+
+    @pytest.mark.asyncio
+    async def test_passes_full_mode_config(self, tmp_path):
+        mock_result = MagicMock()
+        mock_result.model_dump.return_value = {"success": True, "findings_fixed": 5}
+
+        with patch("forge.standalone.run_standalone", new_callable=AsyncMock, return_value=mock_result) as mock_run:
+            result = await forge_fix(str(tmp_path))
+
+        mock_run.assert_called_once()
+        config = mock_run.call_args.kwargs["config"]
+        assert config["mode"] == "full"
+        assert config["dry_run"] is False
+        assert config["repo_path"] == str(tmp_path.resolve())
+
+    @pytest.mark.asyncio
+    async def test_dry_run_parameter(self, tmp_path):
+        mock_result = MagicMock()
+        mock_result.model_dump.return_value = {"success": True}
+
+        with patch("forge.standalone.run_standalone", new_callable=AsyncMock, return_value=mock_result) as mock_run:
+            await forge_fix(str(tmp_path), dry_run=True)
+
+        config = mock_run.call_args.kwargs["config"]
+        assert config["dry_run"] is True
+
+    @pytest.mark.asyncio
+    async def test_model_override(self, tmp_path):
+        mock_result = MagicMock()
+        mock_result.model_dump.return_value = {"success": True}
+
+        with patch("forge.standalone.run_standalone", new_callable=AsyncMock, return_value=mock_result) as mock_run:
+            await forge_fix(str(tmp_path), model="openai/gpt-4o")
+
+        config = mock_run.call_args.kwargs["config"]
+        assert config["models"] == {"default": "openai/gpt-4o"}
+
+    @pytest.mark.asyncio
+    async def test_model_dump_json_mode(self, tmp_path):
+        mock_result = MagicMock()
+        mock_result.model_dump.return_value = {"success": True}
+
+        with patch("forge.standalone.run_standalone", new_callable=AsyncMock, return_value=mock_result):
+            await forge_fix(str(tmp_path))
+
+        mock_result.model_dump.assert_called_once_with(mode="json")
+
+    @pytest.mark.asyncio
+    async def test_bad_path_raises_valueerror(self):
+        with pytest.raises(ValueError, match="is not a directory"):
+            await forge_fix("/nonexistent/path/that/does/not/exist")
