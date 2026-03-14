@@ -113,19 +113,20 @@ def route_plan_items(
     state: ForgeExecutionState,
     repo_path: str,
     cfg: ForgeConfig,
-) -> tuple[list[RemediationItem], list[RemediationItem]]:
-    """Split plan items into deterministic (Tier 0-1) and AI (Tier 2-3).
+) -> tuple[list[RemediationItem], list[RemediationItem], list[RemediationItem]]:
+    """Split plan items into deterministic, Tier 2, and Tier 3.
 
     Tier 0 and Tier 1 are handled synchronously before the async
     inner/middle/outer loops run.
 
     Returns:
-        (handled_items, ai_items) — items that were resolved immediately
-        vs items that need the full coder pipeline.
+        (handled_items, tier2_items, tier3_items) — items resolved immediately,
+        items for FORGE's inner loop, and items for SWE-AF dispatch.
     """
     finding_map: dict[str, AuditFinding] = {f.id: f for f in findings}
     handled: list[RemediationItem] = []
-    ai_items: list[RemediationItem] = []
+    tier2_items: list[RemediationItem] = []
+    tier3_items: list[RemediationItem] = []
 
     for item in plan.items:
         finding = finding_map.get(item.finding_id)
@@ -142,7 +143,7 @@ def route_plan_items(
             if not cfg.enable_tier1_rules:
                 logger.info("Tier 1 rules disabled — promoting %s to Tier 2", finding.id)
                 item.tier = RemediationTier.TIER_2
-                ai_items.append(item)
+                tier2_items.append(item)
                 continue
 
             result = apply_tier1(finding, item, repo_path)
@@ -153,18 +154,21 @@ def route_plan_items(
                 # Failed Tier 1 → promote to Tier 2
                 logger.info("Tier 1 failed for %s — promoting to Tier 2", finding.id)
                 item.tier = RemediationTier.TIER_2
-                ai_items.append(item)
+                tier2_items.append(item)
 
-        elif item.tier in (RemediationTier.TIER_2, RemediationTier.TIER_3):
-            ai_items.append(item)
+        elif item.tier == RemediationTier.TIER_2:
+            tier2_items.append(item)
+
+        elif item.tier == RemediationTier.TIER_3:
+            tier3_items.append(item)
 
         else:
             logger.warning("Unknown tier %s for %s — treating as Tier 2", item.tier, finding.id)
             item.tier = RemediationTier.TIER_2
-            ai_items.append(item)
+            tier2_items.append(item)
 
     logger.info(
-        "Tier router: %d handled (Tier 0/1), %d need AI (Tier 2/3)",
-        len(handled), len(ai_items),
+        "Tier router: %d handled (Tier 0/1), %d Tier 2, %d Tier 3",
+        len(handled), len(tier2_items), len(tier3_items),
     )
-    return handled, ai_items
+    return handled, tier2_items, tier3_items
