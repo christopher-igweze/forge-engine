@@ -1012,6 +1012,40 @@ async def _execute_single_fix(
                 state.outer_loop.deferred_findings.append(finding.id)
                 _store_deferral_context(state, finding.id, new_inner, escalation)
 
+        elif escalation.action == EscalationAction.SPLIT and escalation.split_items:
+            logger.info("Middle loop: SPLIT %s into %d sub-items", finding.id, len(escalation.split_items))
+            for split_item in escalation.split_items:
+                # Create synthetic finding inheriting parent's metadata
+                split_finding = AuditFinding(
+                    id=split_item.finding_id,
+                    title=split_item.title,
+                    description=finding.description,
+                    category=finding.category,
+                    severity=finding.severity,
+                    locations=finding.locations,
+                    suggested_fix=finding.suggested_fix,
+                    data_flow=finding.data_flow,
+                    cwe_id=finding.cwe_id,
+                    owasp_ref=finding.owasp_ref,
+                )
+                split_inner = await run_inner_loop(
+                    app, node_id, split_item, split_finding,
+                    worktree_path, codebase_map, cfg, resolved_models,
+                    prior_changes=prior_changes,
+                )
+                if split_inner.coder_result and split_inner.coder_result.outcome == FixOutcome.COMPLETED:
+                    if worktree_path != state.repo_path:
+                        merged = merge_worktree(state.repo_path, worktree_path,
+                            target_branch=get_current_branch(state.repo_path))
+                        if not merged:
+                            split_inner.coder_result.outcome = FixOutcome.COMPLETED_WITH_DEBT
+                    state.completed_fixes.append(split_inner.coder_result)
+                else:
+                    state.outer_loop.deferred_findings.append(split_item.finding_id)
+                    _store_deferral_context(state, split_item.finding_id, split_inner, escalation)
+            # Parent finding was split — track it
+            state.outer_loop.deferred_findings.append(finding.id)
+
         elif escalation.action == EscalationAction.ESCALATE:
             # Will be handled by outer loop
             pass
