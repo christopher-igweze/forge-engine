@@ -305,13 +305,14 @@ class TestRoutePlanItems:
         state = ForgeExecutionState()
         cfg = ForgeConfig()
 
-        handled, ai_items = route_plan_items(
+        handled, tier2_items, tier3_items = route_plan_items(
             plan, [finding_t0, finding_t2], state, "/tmp", cfg,
         )
         assert len(handled) == 1  # Tier 0
-        assert len(ai_items) == 1  # Tier 2
+        assert len(tier2_items) == 1  # Tier 2
+        assert len(tier3_items) == 0
         assert handled[0].finding_id == "F-t0"
-        assert ai_items[0].finding_id == "F-t2"
+        assert tier2_items[0].finding_id == "F-t2"
 
     def test_tier0_appends_to_completed_fixes(self):
         finding = AuditFinding(
@@ -357,12 +358,12 @@ class TestRoutePlanItems:
         state = ForgeExecutionState()
         cfg = ForgeConfig(enable_tier1_rules=False)
 
-        handled, ai_items = route_plan_items(
+        handled, tier2_items, tier3_items = route_plan_items(
             plan, [finding], state, "/tmp", cfg,
         )
         assert len(handled) == 0
-        assert len(ai_items) == 1
-        assert ai_items[0].tier == RemediationTier.TIER_2
+        assert len(tier2_items) == 1
+        assert tier2_items[0].tier == RemediationTier.TIER_2
 
     def test_tier3_goes_to_ai(self):
         finding = AuditFinding(
@@ -384,12 +385,13 @@ class TestRoutePlanItems:
         state = ForgeExecutionState()
         cfg = ForgeConfig()
 
-        handled, ai_items = route_plan_items(
+        handled, tier2_items, tier3_items = route_plan_items(
             plan, [finding], state, "/tmp", cfg,
         )
         assert len(handled) == 0
-        assert len(ai_items) == 1
-        assert ai_items[0].tier == RemediationTier.TIER_3
+        assert len(tier2_items) == 0
+        assert len(tier3_items) == 1
+        assert tier3_items[0].tier == RemediationTier.TIER_3
 
     def test_missing_finding_skipped(self):
         """If a plan item references a finding not in the list, it's skipped."""
@@ -405,9 +407,10 @@ class TestRoutePlanItems:
         state = ForgeExecutionState()
         cfg = ForgeConfig()
 
-        handled, ai_items = route_plan_items(plan, [], state, "/tmp", cfg)
+        handled, tier2_items, tier3_items = route_plan_items(plan, [], state, "/tmp", cfg)
         assert len(handled) == 0
-        assert len(ai_items) == 0
+        assert len(tier2_items) == 0
+        assert len(tier3_items) == 0
 
     def test_multiple_tiers_mixed(self):
         findings = []
@@ -436,6 +439,67 @@ class TestRoutePlanItems:
         state = ForgeExecutionState()
         cfg = ForgeConfig()
 
-        handled, ai_items = route_plan_items(plan, findings, state, "/tmp", cfg)
+        handled, tier2_items, tier3_items = route_plan_items(plan, findings, state, "/tmp", cfg)
         assert len(handled) == 1  # Only Tier 0
-        assert len(ai_items) == 3  # Two Tier 2 + one Tier 3
+        assert len(tier2_items) == 2  # Two Tier 2
+        assert len(tier3_items) == 1  # One Tier 3
+
+    def test_splits_three_ways(self):
+        """route_plan_items returns a 3-tuple: handled, tier2, tier3."""
+        findings = []
+        items = []
+        for i, tier in enumerate([
+            RemediationTier.TIER_0,
+            RemediationTier.TIER_2,
+            RemediationTier.TIER_3,
+        ]):
+            fid = f"F-3way-{i}"
+            findings.append(AuditFinding(
+                id=fid, title=f"Finding {i}", description="Desc",
+                category=FindingCategory.SECURITY, severity=FindingSeverity.MEDIUM,
+            ))
+            items.append(RemediationItem(
+                finding_id=fid, title=f"Fix {i}", tier=tier, priority=i + 1,
+            ))
+
+        plan = RemediationPlan(
+            items=items,
+            execution_levels=[[f.id for f in findings]],
+            total_items=len(items),
+        )
+        state = ForgeExecutionState()
+        cfg = ForgeConfig()
+
+        result = route_plan_items(plan, findings, state, "/tmp", cfg)
+        assert len(result) == 3  # 3-tuple
+        handled, tier2, tier3 = result
+        assert len(handled) == 1
+        assert len(tier2) == 1
+        assert len(tier3) == 1
+
+    def test_tier3_not_in_tier2_list(self):
+        """Tier 3 items should only appear in the third return value."""
+        finding = AuditFinding(
+            id="F-t3-only",
+            title="Architecture issue",
+            description="Cross-cutting concern",
+            category=FindingCategory.ARCHITECTURE,
+            severity=FindingSeverity.HIGH,
+        )
+        item = RemediationItem(
+            finding_id="F-t3-only", title="Refactor",
+            tier=RemediationTier.TIER_3, priority=1,
+        )
+        plan = RemediationPlan(
+            items=[item],
+            execution_levels=[["F-t3-only"]],
+            total_items=1,
+        )
+        state = ForgeExecutionState()
+        cfg = ForgeConfig()
+
+        handled, tier2, tier3 = route_plan_items(plan, [finding], state, "/tmp", cfg)
+        assert len(handled) == 0
+        assert len(tier2) == 0
+        assert len(tier3) == 1
+        assert tier3[0].finding_id == "F-t3-only"
