@@ -250,19 +250,43 @@ def merge_worktree(
             logger.info("Merged %s into %s", branch, target_branch)
             return True
 
-        # Merge had conflicts — try auto-resolving in favor of the coder's changes.
-        # -X theirs keeps non-conflicting changes from both sides but resolves
-        # conflicting hunks using the incoming (coder's) branch.
-        logger.warning("Merge conflict for %s, retrying with -X theirs", branch)
+        # Merge had conflicts — try rebase-first strategy to preserve both sides.
+        # Step 1: Abort the failed merge
+        logger.warning("Merge conflict for %s, attempting rebase-first strategy", branch)
         _run_git(["merge", "--abort"], cwd=repo_path, check=False)
 
+        # Step 2: Rebase the coder branch onto target to replay changes
+        rebase_result = _run_git(
+            ["rebase", target_branch, branch],
+            cwd=repo_path, check=False,
+        )
+
+        if rebase_result.returncode == 0:
+            # Rebase succeeded — retry merge (should be fast-forward now)
+            _run_git(["checkout", target_branch], cwd=repo_path, check=False)
+            retry_result = _run_git(
+                ["merge", "--no-ff", branch, "-m", merge_msg],
+                cwd=repo_path, check=False,
+            )
+            if retry_result.returncode == 0:
+                logger.info("Rebase-then-merge succeeded for %s into %s", branch, target_branch)
+                return True
+            logger.warning("Merge still failed after rebase for %s", branch)
+            _run_git(["merge", "--abort"], cwd=repo_path, check=False)
+        else:
+            # Rebase failed — abort it
+            logger.warning("Rebase failed for %s, falling back to -X theirs", branch)
+            _run_git(["rebase", "--abort"], cwd=repo_path, check=False)
+
+        # Step 3: Fall back to -X theirs (last resort, may overwrite prior fixes)
+        _run_git(["checkout", target_branch], cwd=repo_path, check=False)
         result = _run_git(
             ["merge", "--no-ff", "-X", "theirs", branch, "-m", merge_msg],
             cwd=repo_path, check=False,
         )
         if result.returncode == 0:
-            logger.info("Auto-resolved merge for %s into %s", branch, target_branch)
-            return True
+            logger.warning("Fell back to -X theirs for %s — marking as debt", branch)
+            return "debt"  # Caller should mark as COMPLETED_WITH_DEBT
 
         logger.error("Merge conflict for %s (even with -X theirs): %s",
                       branch, result.stderr)
