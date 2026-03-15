@@ -221,10 +221,28 @@ async def run_standalone(
         _telemetry_ctx = telemetry.activate()
         _telemetry_ctx.__enter__()
 
+    # Initialize RunTelemetry (real-time observable state + circuit breakers)
+    from forge.execution.run_telemetry import (
+        RunTelemetry,
+        CostLimitExceeded,
+        TimeLimitExceeded,
+        _current_run_telemetry,
+    )
+    run_telemetry: RunTelemetry | None = None
+    _rt_token = None
+
     try:
         state.repo_path = _resolve_repo_path(repo_url, repo_path or cfg.repo_path)
         state.artifacts_dir = os.path.join(state.repo_path, ".artifacts")
         os.makedirs(state.artifacts_dir, exist_ok=True)
+
+        # Create RunTelemetry and activate via contextvar
+        run_telemetry = RunTelemetry(
+            artifacts_dir=state.artifacts_dir,
+            max_cost_usd=cfg.max_cost_usd,
+            max_duration_seconds=cfg.max_duration_seconds,
+        )
+        _rt_token = _current_run_telemetry.set(run_telemetry)
 
         logger.info("FORGE standalone starting: %s", state.repo_path)
         emit_phase_start(cfg, "orchestrator", "Starting FORGE discovery scan.")
@@ -317,6 +335,10 @@ async def run_standalone(
             data={"total_findings": len(state.all_findings)},
         )
 
+    except (CostLimitExceeded, TimeLimitExceeded) as e:
+        logger.warning("FORGE run stopped by circuit breaker: %s", e)
+        state.success = False
+        emit_scan_error(cfg, f"FORGE run stopped: {e}")
     except Exception as e:
         logger.exception("FORGE standalone failed: %s", e)
         state.success = False
@@ -330,6 +352,9 @@ async def run_standalone(
         # Deactivate telemetry context (only if we created it)
         if _telemetry_ctx is not None:
             _telemetry_ctx.__exit__(None, None, None)
+        # Deactivate RunTelemetry contextvar
+        if _rt_token is not None:
+            _current_run_telemetry.reset(_rt_token)
 
     elapsed = time.time() - start_time
 
