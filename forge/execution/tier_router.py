@@ -5,8 +5,7 @@ assigned tier from the Triage Classifier (Agent 6):
 
   Tier 0: Auto-skip (invalid / false-positive)
   Tier 1: Deterministic patch (no LLM, uses tier1/ rules engine)
-  Tier 2: Scoped AI fix (1-3 files, routed to inner loop with Tier 2 coder)
-  Tier 3: Architectural AI fix (5-15 files, routed to inner loop with Tier 3 coder)
+  Tier 2 + Tier 3: ALL AI items routed to SWE-AF DAG executor
 """
 
 from __future__ import annotations
@@ -113,20 +112,20 @@ def route_plan_items(
     state: ForgeExecutionState,
     repo_path: str,
     cfg: ForgeConfig,
-) -> tuple[list[RemediationItem], list[RemediationItem], list[RemediationItem]]:
-    """Split plan items into deterministic, Tier 2, and Tier 3.
+) -> tuple[list[RemediationItem], list[RemediationItem]]:
+    """Split plan items into deterministic and AI (SWE-AF) buckets.
 
     Tier 0 and Tier 1 are handled synchronously before the async
-    inner/middle/outer loops run.
+    SWE-AF executor runs.
 
     Returns:
-        (handled_items, tier2_items, tier3_items) — items resolved immediately,
-        items for FORGE's inner loop, and items for SWE-AF dispatch.
+        (handled_items, sweaf_items) — items resolved immediately via
+        deterministic fixes, and ALL AI items (Tier 2 + Tier 3) for
+        SWE-AF dispatch.
     """
     finding_map: dict[str, AuditFinding] = {f.id: f for f in findings}
     handled: list[RemediationItem] = []
-    tier2_items: list[RemediationItem] = []
-    tier3_items: list[RemediationItem] = []
+    sweaf_items: list[RemediationItem] = []
 
     for item in plan.items:
         finding = finding_map.get(item.finding_id)
@@ -141,9 +140,9 @@ def route_plan_items(
 
         elif item.tier == RemediationTier.TIER_1:
             if not cfg.enable_tier1_rules:
-                logger.info("Tier 1 rules disabled — promoting %s to Tier 2", finding.id)
+                logger.info("Tier 1 rules disabled — promoting %s to SWE-AF", finding.id)
                 item.tier = RemediationTier.TIER_2
-                tier2_items.append(item)
+                sweaf_items.append(item)
                 continue
 
             result = apply_tier1(finding, item, repo_path)
@@ -151,24 +150,21 @@ def route_plan_items(
                 state.completed_fixes.append(result)
                 handled.append(item)
             else:
-                # Failed Tier 1 → promote to Tier 2
-                logger.info("Tier 1 failed for %s — promoting to Tier 2", finding.id)
+                # Failed Tier 1 → promote to SWE-AF
+                logger.info("Tier 1 failed for %s — promoting to SWE-AF", finding.id)
                 item.tier = RemediationTier.TIER_2
-                tier2_items.append(item)
+                sweaf_items.append(item)
 
-        elif item.tier == RemediationTier.TIER_2:
-            tier2_items.append(item)
-
-        elif item.tier == RemediationTier.TIER_3:
-            tier3_items.append(item)
+        elif item.tier in (RemediationTier.TIER_2, RemediationTier.TIER_3):
+            sweaf_items.append(item)
 
         else:
-            logger.warning("Unknown tier %s for %s — treating as Tier 2", item.tier, finding.id)
+            logger.warning("Unknown tier %s for %s — routing to SWE-AF", item.tier, finding.id)
             item.tier = RemediationTier.TIER_2
-            tier2_items.append(item)
+            sweaf_items.append(item)
 
     logger.info(
-        "Tier router: %d handled (Tier 0/1), %d Tier 2, %d Tier 3",
-        len(handled), len(tier2_items), len(tier3_items),
+        "Tier router: %d handled (Tier 0/1), %d AI items → SWE-AF",
+        len(handled), len(sweaf_items),
     )
-    return handled, tier2_items, tier3_items
+    return handled, sweaf_items

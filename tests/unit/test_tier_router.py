@@ -305,14 +305,13 @@ class TestRoutePlanItems:
         state = ForgeExecutionState()
         cfg = ForgeConfig()
 
-        handled, tier2_items, tier3_items = route_plan_items(
+        handled, sweaf_items = route_plan_items(
             plan, [finding_t0, finding_t2], state, "/tmp", cfg,
         )
         assert len(handled) == 1  # Tier 0
-        assert len(tier2_items) == 1  # Tier 2
-        assert len(tier3_items) == 0
+        assert len(sweaf_items) == 1  # Tier 2 → SWE-AF
         assert handled[0].finding_id == "F-t0"
-        assert tier2_items[0].finding_id == "F-t2"
+        assert sweaf_items[0].finding_id == "F-t2"
 
     def test_tier0_appends_to_completed_fixes(self):
         finding = AuditFinding(
@@ -358,14 +357,14 @@ class TestRoutePlanItems:
         state = ForgeExecutionState()
         cfg = ForgeConfig(enable_tier1_rules=False)
 
-        handled, tier2_items, tier3_items = route_plan_items(
+        handled, sweaf_items = route_plan_items(
             plan, [finding], state, "/tmp", cfg,
         )
         assert len(handled) == 0
-        assert len(tier2_items) == 1
-        assert tier2_items[0].tier == RemediationTier.TIER_2
+        assert len(sweaf_items) == 1
+        assert sweaf_items[0].tier == RemediationTier.TIER_2
 
-    def test_tier3_goes_to_ai(self):
+    def test_tier3_goes_to_sweaf(self):
         finding = AuditFinding(
             id="F-t3",
             title="Architecture refactor",
@@ -385,13 +384,12 @@ class TestRoutePlanItems:
         state = ForgeExecutionState()
         cfg = ForgeConfig()
 
-        handled, tier2_items, tier3_items = route_plan_items(
+        handled, sweaf_items = route_plan_items(
             plan, [finding], state, "/tmp", cfg,
         )
         assert len(handled) == 0
-        assert len(tier2_items) == 0
-        assert len(tier3_items) == 1
-        assert tier3_items[0].tier == RemediationTier.TIER_3
+        assert len(sweaf_items) == 1
+        assert sweaf_items[0].tier == RemediationTier.TIER_3
 
     def test_missing_finding_skipped(self):
         """If a plan item references a finding not in the list, it's skipped."""
@@ -407,10 +405,9 @@ class TestRoutePlanItems:
         state = ForgeExecutionState()
         cfg = ForgeConfig()
 
-        handled, tier2_items, tier3_items = route_plan_items(plan, [], state, "/tmp", cfg)
+        handled, sweaf_items = route_plan_items(plan, [], state, "/tmp", cfg)
         assert len(handled) == 0
-        assert len(tier2_items) == 0
-        assert len(tier3_items) == 0
+        assert len(sweaf_items) == 0
 
     def test_multiple_tiers_mixed(self):
         findings = []
@@ -439,13 +436,12 @@ class TestRoutePlanItems:
         state = ForgeExecutionState()
         cfg = ForgeConfig()
 
-        handled, tier2_items, tier3_items = route_plan_items(plan, findings, state, "/tmp", cfg)
+        handled, sweaf_items = route_plan_items(plan, findings, state, "/tmp", cfg)
         assert len(handled) == 1  # Only Tier 0
-        assert len(tier2_items) == 2  # Two Tier 2
-        assert len(tier3_items) == 1  # One Tier 3
+        assert len(sweaf_items) == 3  # Two Tier 2 + one Tier 3 combined
 
-    def test_splits_three_ways(self):
-        """route_plan_items returns a 3-tuple: handled, tier2, tier3."""
+    def test_all_ai_items_go_to_sweaf(self):
+        """route_plan_items returns a 2-tuple: handled, sweaf_items."""
         findings = []
         items = []
         for i, tier in enumerate([
@@ -471,35 +467,34 @@ class TestRoutePlanItems:
         cfg = ForgeConfig()
 
         result = route_plan_items(plan, findings, state, "/tmp", cfg)
-        assert len(result) == 3  # 3-tuple
-        handled, tier2, tier3 = result
+        assert len(result) == 2  # 2-tuple
+        handled, sweaf_items = result
         assert len(handled) == 1
-        assert len(tier2) == 1
-        assert len(tier3) == 1
+        assert len(sweaf_items) == 2  # Tier 2 + Tier 3 combined
 
-    def test_tier3_not_in_tier2_list(self):
-        """Tier 3 items should only appear in the third return value."""
-        finding = AuditFinding(
-            id="F-t3-only",
-            title="Architecture issue",
-            description="Cross-cutting concern",
-            category=FindingCategory.ARCHITECTURE,
-            severity=FindingSeverity.HIGH,
-        )
-        item = RemediationItem(
-            finding_id="F-t3-only", title="Refactor",
-            tier=RemediationTier.TIER_3, priority=1,
-        )
+    def test_tier2_and_tier3_combined_in_sweaf_items(self):
+        """Both Tier 2 and Tier 3 items appear in the same sweaf_items list."""
+        findings = []
+        items = []
+        for fid, tier in [("F-t2", RemediationTier.TIER_2), ("F-t3", RemediationTier.TIER_3)]:
+            findings.append(AuditFinding(
+                id=fid, title=f"Finding {fid}", description="Desc",
+                category=FindingCategory.SECURITY, severity=FindingSeverity.HIGH,
+            ))
+            items.append(RemediationItem(
+                finding_id=fid, title=f"Fix {fid}", tier=tier, priority=1,
+            ))
+
         plan = RemediationPlan(
-            items=[item],
-            execution_levels=[["F-t3-only"]],
-            total_items=1,
+            items=items,
+            execution_levels=[[f.id for f in findings]],
+            total_items=len(items),
         )
         state = ForgeExecutionState()
         cfg = ForgeConfig()
 
-        handled, tier2, tier3 = route_plan_items(plan, [finding], state, "/tmp", cfg)
+        handled, sweaf_items = route_plan_items(plan, findings, state, "/tmp", cfg)
         assert len(handled) == 0
-        assert len(tier2) == 0
-        assert len(tier3) == 1
-        assert tier3[0].finding_id == "F-t3-only"
+        assert len(sweaf_items) == 2
+        sweaf_ids = {item.finding_id for item in sweaf_items}
+        assert sweaf_ids == {"F-t2", "F-t3"}

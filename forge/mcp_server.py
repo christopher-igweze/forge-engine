@@ -150,6 +150,29 @@ def forge_report(path: str) -> dict:
 
 
 @mcp.tool()
+def forge_status(path: str) -> dict:
+    """Get real-time status of a running FORGE scan including cost, time, and agent activity.
+
+    Reads the live_status.json file written by RunTelemetry after every LLM call.
+    No API calls are made — this reads a local file that is updated in real-time.
+
+    Args:
+        path: Path to the repository being scanned.
+
+    Returns:
+        Status dict with cost, time, phase, findings progress, and active agents.
+        Returns {"status": "no_active_run"} if no scan is in progress.
+    """
+    status_file = Path(path) / ".artifacts" / "telemetry" / "live_status.json"
+    if not status_file.exists():
+        return {"status": "no_active_run"}
+    try:
+        return json.loads(status_file.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {"status": "error", "detail": "Failed to read live_status.json"}
+
+
+@mcp.tool()
 def forge_findings(path: str) -> list[dict]:
     """List individual findings from the most recent scan.
 

@@ -1,8 +1,7 @@
-"""SWE-AF HTTP bridge for Tier 3 remediation.
+"""SWE-AF HTTP bridge for all AI remediation (Tier 2 + Tier 3).
 
-Routes complex cross-cutting findings to SWE-AF's DAG executor via
-AgentField's async API. Follows the same HTTP pattern as
-vibe2prod's forge_bridge.py.
+Routes findings to SWE-AF's DAG executor via AgentField's async API.
+Passes remaining budget from RunTelemetry so SWE-AF respects cost caps.
 """
 
 from __future__ import annotations
@@ -16,7 +15,7 @@ import urllib.request
 from typing import TYPE_CHECKING, Any
 
 from forge.execution.sweaf_adapter import (
-    compute_execution_levels,
+    build_plan_result,
     finding_to_planned_issue,
     sweaf_result_to_coder_fix_results,
     write_issue_files,
@@ -70,15 +69,8 @@ async def execute_tier3_via_sweaf(
     os.makedirs(artifacts_dir, exist_ok=True)
     write_issue_files(issues, artifacts_dir)
 
-    # Step 3: Build synthetic plan_result
-    levels = compute_execution_levels(issues)
-    plan_result = {
-        "issues": issues,
-        "levels": levels,
-        "artifacts_dir": artifacts_dir,
-        "prd": {},
-        "architecture": {},
-    }
+    # Step 3: Build synthetic plan_result (includes M2.5 model override)
+    plan_result = build_plan_result(issues, artifacts_dir)
 
     # Step 4: POST to AgentField
     try:
@@ -106,6 +98,21 @@ async def _post_execution(
     """POST async execution request to AgentField. Returns execution_id."""
     url = f"{cfg.sweaf_agentfield_url}/api/v1/execute/async/{cfg.sweaf_node_id}.execute"
 
+    # Read remaining budget from RunTelemetry (if active)
+    max_cost = cfg.sweaf_max_cost_usd
+    try:
+        from forge.execution.run_telemetry import _current_run_telemetry
+        rt = _current_run_telemetry.get(None)
+        if rt is not None:
+            remaining = rt.max_cost_usd - rt.total_cost_usd
+            if remaining < max_cost:
+                max_cost = max(0.0, remaining)
+                logger.info(
+                    "SWE-AF bridge: capping cost to $%.2f (remaining budget)", max_cost,
+                )
+    except Exception:
+        pass  # RunTelemetry not available — use config default
+
     payload = json.dumps({
         "plan_result": plan_result,
         "repo_path": state.repo_path,
@@ -113,7 +120,7 @@ async def _post_execution(
         "max_coding_iterations": cfg.sweaf_max_coding_iterations,
         "max_concurrent_issues": cfg.sweaf_max_concurrent_issues,
         "runtime": cfg.sweaf_runtime,
-        "max_cost_usd": cfg.sweaf_max_cost_usd,
+        "max_cost_usd": max_cost,
     }).encode()
 
     headers = {
