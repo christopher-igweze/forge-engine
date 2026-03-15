@@ -257,11 +257,11 @@ class TestRegressionCheck:
         assert result.review_result.decision == ReviewDecision.APPROVE
 
 
-class TestTier3Routing:
-    """Tier 3 items should route to SWE-AF when enabled."""
+class TestSweafRouting:
+    """All AI items should route to SWE-AF."""
 
-    def test_tier3_routed_to_sweaf(self):
-        """Tier 3 dispatched to SWE-AF when sweaf_enabled=True."""
+    def test_ai_items_routed_to_sweaf(self):
+        """All AI items (Tier 2 + Tier 3) dispatched to SWE-AF."""
         from forge.phases import _run_remediation
 
         state = ForgeExecutionState()
@@ -272,14 +272,14 @@ class TestTier3Routing:
             execution_levels=[["F-001"]],
             total_items=1,
         )
-        cfg = ForgeConfig(sweaf_enabled=True, sweaf_agentfield_url="http://localhost:8080")
+        cfg = ForgeConfig(sweaf_agentfield_url="http://localhost:8080")
         resolved = cfg.resolved_models()
 
         sweaf_results = [CoderFixResult(
             finding_id="F-001", outcome=FixOutcome.COMPLETED, summary="SWE-AF fixed",
         )]
 
-        with patch("forge.execution.tier_router.route_plan_items", return_value=([], [], [_make_item(tier=RemediationTier.TIER_3)])), \
+        with patch("forge.execution.tier_router.route_plan_items", return_value=([], [_make_item(tier=RemediationTier.TIER_3)])), \
              patch("forge.execution.sweaf_bridge.execute_tier3_via_sweaf", return_value=sweaf_results) as mock_sweaf:
 
             asyncio.run(_run_remediation(AsyncMock(), state, cfg, resolved))
@@ -287,7 +287,7 @@ class TestTier3Routing:
         mock_sweaf.assert_called_once()
         assert len(state.completed_fixes) == 1
 
-    def test_tier3_falls_back(self):
+    def test_sweaf_falls_back_to_forge(self):
         """SWE-AF failure triggers FORGE fallback when sweaf_fallback_to_forge=True."""
         from forge.phases import _run_remediation
 
@@ -300,14 +300,13 @@ class TestTier3Routing:
             total_items=1,
         )
         cfg = ForgeConfig(
-            sweaf_enabled=True,
             sweaf_agentfield_url="http://localhost:8080",
             sweaf_fallback_to_forge=True,
         )
 
-        with patch("forge.execution.tier_router.route_plan_items", return_value=([], [], [_make_item(tier=RemediationTier.TIER_3)])), \
+        with patch("forge.execution.tier_router.route_plan_items", return_value=([], [_make_item(tier=RemediationTier.TIER_3)])), \
              patch("forge.execution.sweaf_bridge.execute_tier3_via_sweaf", side_effect=RuntimeError("SWE-AF down")), \
-             patch("forge.phases._run_tier3_via_forge") as mock_fallback:
+             patch("forge.phases._run_sweaf_fallback_via_forge") as mock_fallback:
 
             asyncio.run(_run_remediation(AsyncMock(), state, cfg, cfg.resolved_models()))
 
