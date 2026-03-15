@@ -221,28 +221,34 @@ async def run_standalone(
         _telemetry_ctx = telemetry.activate()
         _telemetry_ctx.__enter__()
 
-    # Initialize RunTelemetry (real-time observable state + circuit breakers)
+    # Initialize RunTelemetry (real-time observable state + circuit breakers).
+    # Activate the contextvar BEFORE any LLM calls so AgentAI.run() can
+    # record costs from the very first invocation (including discovery).
     from forge.execution.run_telemetry import (
         RunTelemetry,
         CostLimitExceeded,
         TimeLimitExceeded,
         _current_run_telemetry,
     )
-    run_telemetry: RunTelemetry | None = None
-    _rt_token = None
+    # Use a temp dir initially; we'll update once repo_path is resolved.
+    import tempfile
+    _tmp_telemetry_dir = tempfile.mkdtemp(prefix="forge-telemetry-")
+    run_telemetry = RunTelemetry(
+        artifacts_dir=_tmp_telemetry_dir,
+        max_cost_usd=cfg.max_cost_usd,
+        max_duration_seconds=cfg.max_duration_seconds,
+    )
+    _rt_token = _current_run_telemetry.set(run_telemetry)
 
     try:
         state.repo_path = _resolve_repo_path(repo_url, repo_path or cfg.repo_path)
         state.artifacts_dir = os.path.join(state.repo_path, ".artifacts")
         os.makedirs(state.artifacts_dir, exist_ok=True)
 
-        # Create RunTelemetry and activate via contextvar
-        run_telemetry = RunTelemetry(
-            artifacts_dir=state.artifacts_dir,
-            max_cost_usd=cfg.max_cost_usd,
-            max_duration_seconds=cfg.max_duration_seconds,
-        )
-        _rt_token = _current_run_telemetry.set(run_telemetry)
+        # Point RunTelemetry at the real artifacts directory now that we know it
+        run_telemetry._dir = Path(state.artifacts_dir) / "telemetry"
+        run_telemetry._dir.mkdir(parents=True, exist_ok=True)
+        run_telemetry._flush()
 
         logger.info("FORGE standalone starting: %s", state.repo_path)
         emit_phase_start(cfg, "orchestrator", "Starting FORGE discovery scan.")
@@ -355,6 +361,10 @@ async def run_standalone(
         # Deactivate RunTelemetry contextvar
         if _rt_token is not None:
             _current_run_telemetry.reset(_rt_token)
+        # Clean up temp telemetry dir if we never resolved a real one
+        import shutil
+        if _tmp_telemetry_dir and not state.artifacts_dir:
+            shutil.rmtree(_tmp_telemetry_dir, ignore_errors=True)
 
     elapsed = time.time() - start_time
 
