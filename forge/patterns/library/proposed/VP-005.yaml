@@ -1,0 +1,25 @@
+id: VP-005
+name: Missing rate limiting on auth endpoint
+slug: missing-rate-limiting-on-auth-endpoint
+description: Auto-proposed pattern from 4 findings across 4 scans.
+category: security
+severity_default: high
+cwe_ids:
+- CWE-307
+owasp_refs: []
+tier: llm_only
+signals: []
+deterministic_threshold: 0.7
+llm_guidance:
+  reasoning_prompt: No rate limiter on /auth/login
+  examples: []
+  counter_examples: []
+  key_questions: []
+  technology_variants: {}
+source: scan_derived
+source_url: ''
+fix_strategy: ''
+fix_examples: {}
+times_detected: 4
+times_confirmed: 0
+false_positive_rate: 0.0

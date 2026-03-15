@@ -114,13 +114,20 @@ async def _post_execution(
         pass  # RunTelemetry not available — use config default
 
     payload = json.dumps({
-        "plan_result": plan_result,
-        "repo_path": state.repo_path,
-        "repo_url": cfg.repo_url,
-        "max_coding_iterations": cfg.sweaf_max_coding_iterations,
-        "max_concurrent_issues": cfg.sweaf_max_concurrent_issues,
-        "runtime": cfg.sweaf_runtime,
-        "max_cost_usd": max_cost,
+        "input": {
+            "plan_result": plan_result,
+            "repo_path": state.repo_path,
+            "config": {
+                "runtime": cfg.sweaf_runtime,
+                "max_coding_iterations": cfg.sweaf_max_coding_iterations,
+                "max_concurrent_issues": cfg.sweaf_max_concurrent_issues,
+                "max_cost_usd": max_cost,
+                "models": {"default": "minimax/minimax-m2.5"},
+            },
+            "git_config": {
+                "repo_url": cfg.repo_url,
+            },
+        },
     }).encode()
 
     headers = {
