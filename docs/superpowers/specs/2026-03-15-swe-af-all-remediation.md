@@ -57,83 +57,411 @@ SWE-AF with M2.5 workers should be comparable cost to FORGE M2.5 but **much fast
 
 ---
 
-## Critical: Cost Circuit Breaker
+## Critical: Real-Time Telemetry + Circuit Breakers
 
-**This is the first thing to implement. Non-negotiable.**
+**This is the first thing to implement. Non-negotiable. No more blind runs.**
 
-### Hard cost cap in the executor
+### Design Principle
+
+Every resource metric (cost, time, tokens, agent status) must be:
+1. **Updated in real-time** — after every single LLM call, not at checkpoints
+2. **Accessible at any moment** — queryable while the run is in progress, not just after completion
+3. **Written to disk incrementally** — survives crashes, kills, and interruptions
+4. **Protected by circuit breakers** — hard caps on cost AND time that kill the run immediately
+
+### RunTelemetry — Real-Time Observable State
 
 ```python
-# forge/execution/cost_guard.py
+# forge/execution/run_telemetry.py
 
-class CostGuard:
-    """Hard cost cap that kills the run when budget is exceeded."""
+import asyncio
+import json
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
 
-    def __init__(self, max_cost_usd: float = 5.0):
-        self.max_cost_usd = max_cost_usd
-        self._spent = 0.0
+
+@dataclass
+class AgentStatus:
+    """Current state of a single agent invocation."""
+    agent_name: str
+    model: str
+    status: str  # "running" | "completed" | "failed" | "killed"
+    started_at: float
+    completed_at: float | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+    finding_id: str = ""
+    error: str = ""
+
+
+class RunTelemetry:
+    """Real-time telemetry for a FORGE run. Always accessible, always current.
+
+    Writes to disk after every update so state survives crashes.
+    Readable by external tools (MCP server, CLI status, monitoring) at any time.
+    """
+
+    def __init__(
+        self,
+        artifacts_dir: str,
+        max_cost_usd: float = 5.0,
+        max_duration_seconds: float = 1800.0,  # 30 min default
+    ):
+        self._dir = Path(artifacts_dir) / "telemetry"
+        self._dir.mkdir(parents=True, exist_ok=True)
         self._lock = asyncio.Lock()
+        self._start_time = time.time()
 
-    async def record(self, cost_usd: float) -> None:
+        # Budget limits
+        self.max_cost_usd = max_cost_usd
+        self.max_duration_seconds = max_duration_seconds
+
+        # Cumulative counters (updated after every LLM call)
+        self.total_cost_usd: float = 0.0
+        self.total_tokens: int = 0
+        self.total_input_tokens: int = 0
+        self.total_output_tokens: int = 0
+        self.total_invocations: int = 0
+        self.failed_invocations: int = 0
+
+        # Per-agent breakdown
+        self.cost_by_agent: dict[str, float] = {}
+        self.cost_by_model: dict[str, float] = {}
+        self.tokens_by_agent: dict[str, int] = {}
+
+        # Active agents (currently running)
+        self.active_agents: dict[str, AgentStatus] = {}
+
+        # Phase tracking
+        self.current_phase: str = "initializing"
+        self.phases_completed: list[str] = []
+
+        # Findings progress
+        self.total_findings: int = 0
+        self.findings_fixed: int = 0
+        self.findings_deferred: int = 0
+        self.findings_in_progress: int = 0
+
+        # Write initial state
+        self._flush()
+
+    # ── Circuit Breakers ──────────────────────────────────────────
+
+    def check_budget(self) -> None:
+        """Raise immediately if cost or time budget exceeded."""
+        if self.total_cost_usd >= self.max_cost_usd:
+            self._flush()
+            raise CostLimitExceeded(
+                f"BUDGET EXCEEDED: ${self.total_cost_usd:.2f} >= "
+                f"${self.max_cost_usd:.2f} limit. Run killed."
+            )
+        elapsed = time.time() - self._start_time
+        if elapsed >= self.max_duration_seconds:
+            self._flush()
+            raise TimeLimitExceeded(
+                f"TIME EXCEEDED: {elapsed:.0f}s >= "
+                f"{self.max_duration_seconds:.0f}s limit. Run killed."
+            )
+
+    # ── Recording (called after every LLM call) ──────────────────
+
+    async def record_invocation(
+        self,
+        agent_name: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        cost_usd: float,
+        success: bool = True,
+        finding_id: str = "",
+    ) -> None:
+        """Record a single LLM call. Updates all counters and flushes to disk."""
         async with self._lock:
-            self._spent += cost_usd
-            if self._spent >= self.max_cost_usd:
-                raise CostLimitExceeded(
-                    f"Cost limit exceeded: ${self._spent:.2f} >= ${self.max_cost_usd:.2f}. "
-                    f"Run aborted to protect your budget."
-                )
+            self.total_cost_usd += cost_usd
+            self.total_tokens += input_tokens + output_tokens
+            self.total_input_tokens += input_tokens
+            self.total_output_tokens += output_tokens
+            self.total_invocations += 1
+            if not success:
+                self.failed_invocations += 1
 
-    @property
-    def spent(self) -> float:
-        return self._spent
+            self.cost_by_agent[agent_name] = (
+                self.cost_by_agent.get(agent_name, 0) + cost_usd
+            )
+            self.cost_by_model[model] = (
+                self.cost_by_model.get(model, 0) + cost_usd
+            )
+            self.tokens_by_agent[agent_name] = (
+                self.tokens_by_agent.get(agent_name, 0) + input_tokens + output_tokens
+            )
 
-    @property
-    def remaining(self) -> float:
-        return max(0, self.max_cost_usd - self._spent)
+            # Append to invocations log (survives crashes)
+            self._append_invocation({
+                "ts": time.time(),
+                "agent": agent_name,
+                "model": model,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cost_usd": cost_usd,
+                "success": success,
+                "finding_id": finding_id,
+                "cumulative_cost": self.total_cost_usd,
+                "budget_remaining": self.max_cost_usd - self.total_cost_usd,
+                "elapsed_seconds": time.time() - self._start_time,
+            })
+
+            # Flush summary to disk
+            self._flush()
+
+        # Check circuit breakers AFTER recording
+        self.check_budget()
+
+    # ── Agent lifecycle tracking ──────────────────────────────────
+
+    def agent_started(self, agent_id: str, agent_name: str, model: str, finding_id: str = "") -> None:
+        self.active_agents[agent_id] = AgentStatus(
+            agent_name=agent_name,
+            model=model,
+            status="running",
+            started_at=time.time(),
+            finding_id=finding_id,
+        )
+        self._flush()
+
+    def agent_completed(self, agent_id: str, cost_usd: float = 0) -> None:
+        if agent_id in self.active_agents:
+            self.active_agents[agent_id].status = "completed"
+            self.active_agents[agent_id].completed_at = time.time()
+            self.active_agents[agent_id].cost_usd = cost_usd
+        self._flush()
+
+    def agent_failed(self, agent_id: str, error: str = "") -> None:
+        if agent_id in self.active_agents:
+            self.active_agents[agent_id].status = "failed"
+            self.active_agents[agent_id].completed_at = time.time()
+            self.active_agents[agent_id].error = error
+        self._flush()
+
+    # ── Phase tracking ────────────────────────────────────────────
+
+    def set_phase(self, phase: str) -> None:
+        if self.current_phase != "initializing":
+            self.phases_completed.append(self.current_phase)
+        self.current_phase = phase
+        self._flush()
+
+    def update_findings_progress(self, total: int = 0, fixed: int = 0, deferred: int = 0, in_progress: int = 0) -> None:
+        if total: self.total_findings = total
+        if fixed: self.findings_fixed = fixed
+        if deferred: self.findings_deferred = deferred
+        if in_progress: self.findings_in_progress = in_progress
+        self._flush()
+
+    # ── Snapshot (readable by external tools at any time) ─────────
+
+    def snapshot(self) -> dict:
+        """Current state as a dict. Safe to call from any thread/process."""
+        elapsed = time.time() - self._start_time
+        return {
+            "status": "running",
+            "elapsed_seconds": round(elapsed, 1),
+            "elapsed_human": f"{int(elapsed//60)}m {int(elapsed%60)}s",
+            "budget": {
+                "cost_spent": round(self.total_cost_usd, 4),
+                "cost_limit": self.max_cost_usd,
+                "cost_remaining": round(self.max_cost_usd - self.total_cost_usd, 4),
+                "cost_percent": round(self.total_cost_usd / self.max_cost_usd * 100, 1) if self.max_cost_usd > 0 else 0,
+                "time_spent": round(elapsed, 0),
+                "time_limit": self.max_duration_seconds,
+                "time_remaining": round(max(0, self.max_duration_seconds - elapsed), 0),
+                "time_percent": round(elapsed / self.max_duration_seconds * 100, 1) if self.max_duration_seconds > 0 else 0,
+            },
+            "totals": {
+                "invocations": self.total_invocations,
+                "failed": self.failed_invocations,
+                "tokens": self.total_tokens,
+                "input_tokens": self.total_input_tokens,
+                "output_tokens": self.total_output_tokens,
+            },
+            "cost_by_agent": dict(sorted(self.cost_by_agent.items(), key=lambda x: -x[1])),
+            "cost_by_model": dict(sorted(self.cost_by_model.items(), key=lambda x: -x[1])),
+            "phase": self.current_phase,
+            "phases_completed": self.phases_completed,
+            "findings": {
+                "total": self.total_findings,
+                "fixed": self.findings_fixed,
+                "deferred": self.findings_deferred,
+                "in_progress": self.findings_in_progress,
+            },
+            "active_agents": [
+                {
+                    "name": a.agent_name,
+                    "model": a.model,
+                    "status": a.status,
+                    "running_for": f"{time.time() - a.started_at:.0f}s",
+                    "finding_id": a.finding_id,
+                }
+                for a in self.active_agents.values()
+                if a.status == "running"
+            ],
+        }
+
+    # ── Disk persistence ──────────────────────────────────────────
+
+    def _flush(self) -> None:
+        """Write current snapshot to disk. Called after every state change."""
+        try:
+            snapshot = self.snapshot()
+            # Atomic write via temp file
+            tmp = self._dir / "live_status.tmp"
+            target = self._dir / "live_status.json"
+            tmp.write_text(json.dumps(snapshot, indent=2))
+            tmp.rename(target)
+        except Exception:
+            pass  # Never fail on telemetry write
+
+    def _append_invocation(self, record: dict) -> None:
+        """Append a single invocation to the JSONL log."""
+        try:
+            with open(self._dir / "invocations.jsonl", "a") as f:
+                f.write(json.dumps(record) + "\n")
+        except Exception:
+            pass
 
 
 class CostLimitExceeded(Exception):
-    """Raised when the hard cost cap is hit."""
+    """Hard cost cap hit. Run must stop immediately."""
+    pass
+
+
+class TimeLimitExceeded(Exception):
+    """Hard time cap hit. Run must stop immediately."""
     pass
 ```
 
-### Wired into every LLM call
+### How external tools read it
+
+The `live_status.json` file is updated after **every single LLM call**. Any tool can read it at any time:
+
+```bash
+# CLI: check status of running scan
+cat .artifacts/telemetry/live_status.json | python3 -m json.tool
+
+# MCP server: forge_status tool reads this file
+# Monitoring: watch -n 1 cat .artifacts/telemetry/live_status.json
+```
+
+Example `live_status.json` during a run:
+```json
+{
+  "status": "running",
+  "elapsed_seconds": 142.3,
+  "elapsed_human": "2m 22s",
+  "budget": {
+    "cost_spent": 0.4821,
+    "cost_limit": 5.0,
+    "cost_remaining": 4.5179,
+    "cost_percent": 9.6,
+    "time_spent": 142,
+    "time_limit": 1800,
+    "time_remaining": 1658,
+    "time_percent": 7.9
+  },
+  "totals": {
+    "invocations": 12,
+    "failed": 0,
+    "tokens": 284102,
+    "input_tokens": 241000,
+    "output_tokens": 43102
+  },
+  "cost_by_agent": {
+    "security_auditor/infrastructure": 0.14,
+    "security_auditor/auth_flow": 0.12,
+    "architecture_reviewer": 0.09
+  },
+  "phase": "discovery",
+  "findings": {
+    "total": 0,
+    "fixed": 0,
+    "deferred": 0,
+    "in_progress": 0
+  },
+  "active_agents": [
+    {"name": "quality_auditor/code_patterns", "model": "minimax/minimax-m2.5", "status": "running", "running_for": "23s", "finding_id": ""},
+    {"name": "quality_auditor/performance", "model": "minimax/minimax-m2.5", "status": "running", "running_for": "18s", "finding_id": ""}
+  ]
+}
+```
+
+### MCP integration
+
+Add a `forge_status` tool that reads `live_status.json`:
 
 ```python
-# In AgentAI.run() or the standalone dispatcher:
-result = await llm_call(...)
-await cost_guard.record(result.cost_usd)  # Raises if over budget
+@mcp.tool()
+def forge_status(path: str) -> dict:
+    """Get real-time status of a running FORGE scan including cost, time, and agent activity."""
+    status_file = Path(path) / ".artifacts" / "telemetry" / "live_status.json"
+    if not status_file.exists():
+        return {"status": "no_active_run"}
+    return json.loads(status_file.read_text())
+```
+
+### CLI integration
+
+```bash
+# While a scan is running in another terminal:
+vibe2prod status .
+# Output:
+# FORGE Run Status
+# ================
+# Phase: remediation (discovery ✓, triage ✓)
+# Time:  2m 22s / 30m 0s (7.9%)
+# Cost:  $0.48 / $5.00 (9.6%)
+# Calls: 12 (0 failed)
+#
+# Findings: 25 total, 3 fixed, 0 deferred, 8 in progress
+#
+# Active agents:
+#   quality_auditor/code_patterns  minimax-m2.5  running 23s
+#   quality_auditor/performance    minimax-m2.5  running 18s
 ```
 
 ### Config
 
 ```python
 # forge/config.py
-max_cost_usd: float = 5.0  # Hard cap, kills run immediately
-cost_warning_threshold: float = 0.8  # Warn at 80% of budget
+max_cost_usd: float = 5.0          # Hard cap — kills run immediately
+max_duration_seconds: float = 1800  # 30 min hard cap
+cost_warning_threshold: float = 0.8 # Log warning at 80% of budget
 ```
 
-### CLI flag
+### CLI flags
 
 ```bash
-vibe2prod scan . --max-cost 5.00
-vibe2prod scan . --max-cost 10.00  # Override for large repos
+vibe2prod scan . --max-cost 5.00 --max-time 1800
+vibe2prod scan . --max-cost 10.00 --max-time 3600  # Override for large repos
+vibe2prod status .  # Check running scan status
 ```
 
 ---
 
 ## Implementation Plan
 
-### Track 1: Cost Guard (do first, before anything else)
+### Track 1: Real-Time Telemetry + Circuit Breakers (do first, before anything else)
 
 | # | File | Change |
 |---|------|--------|
-| 1 | `forge/execution/cost_guard.py` | NEW: CostGuard class + CostLimitExceeded |
-| 2 | `forge/config.py` | Add `max_cost_usd`, `cost_warning_threshold` |
-| 3 | `forge/vendor/agent_ai/client.py` | Wire cost_guard.record() after every LLM call |
-| 4 | `forge/standalone.py` | Initialize CostGuard, pass to dispatcher |
-| 5 | `forge/cli.py` | Add `--max-cost` flag |
-| 6 | `tests/unit/test_cost_guard.py` | NEW: 6 tests (record, exceed, remaining, warning, concurrent) |
+| 1 | `forge/execution/run_telemetry.py` | NEW: RunTelemetry class with real-time state, disk flush, circuit breakers |
+| 2 | `forge/config.py` | Add `max_cost_usd`, `max_duration_seconds`, `cost_warning_threshold` |
+| 3 | `forge/vendor/agent_ai/client.py` | Wire `telemetry.record_invocation()` after every LLM call |
+| 4 | `forge/standalone.py` | Initialize RunTelemetry, pass to dispatcher, catch CostLimitExceeded/TimeLimitExceeded |
+| 5 | `forge/cli.py` | Add `--max-cost`, `--max-time` flags + `vibe2prod status .` command |
+| 6 | `forge/mcp_server.py` | Add `forge_status` tool that reads live_status.json |
+| 7 | `forge/phases.py` | Wire `set_phase()`, `update_findings_progress()` at phase transitions |
+| 8 | `tests/unit/test_run_telemetry.py` | NEW: 10 tests (record, cost exceed, time exceed, snapshot, flush, agents, phases, concurrent) |
 
 ### Track 2: Route all remediation to SWE-AF
 
@@ -175,10 +503,12 @@ vibe2prod scan . --max-cost 10.00  # Override for large repos
 
 | # | Scope | Description |
 |---|-------|-------------|
-| 1 | `cost_guard.py` + `config.py` | Add hard cost cap with CostLimitExceeded exception |
-| 2 | `client.py` + `standalone.py` | Wire cost guard into every LLM call |
-| 3 | `cli.py` | Add --max-cost flag |
-| 4 | `test_cost_guard.py` | 6 unit tests for cost guard |
+| 1 | `run_telemetry.py` + `config.py` | Real-time telemetry with cost + time circuit breakers |
+| 2 | `client.py` + `standalone.py` | Wire telemetry into every LLM call + phase transitions |
+| 3 | `cli.py` | Add --max-cost, --max-time flags + `status` command |
+| 4 | `mcp_server.py` | Add forge_status tool reading live_status.json |
+| 5 | `phases.py` | Wire set_phase() and update_findings_progress() |
+| 6 | `test_run_telemetry.py` | 10 unit tests for telemetry + circuit breakers |
 | 5 | `tier_router.py` | Route all AI items to SWE-AF (remove Tier 2/3 split) |
 | 6 | `phases.py` | Remove FORGE executor for Tier 2, all to SWE-AF |
 | 7 | `sweaf_adapter.py` | Handle Tier 2 items + M2.5 model override |
