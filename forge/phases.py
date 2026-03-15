@@ -32,6 +32,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _get_run_telemetry():
+    """Get the active RunTelemetry instance (if any)."""
+    try:
+        from forge.execution.run_telemetry import _current_run_telemetry
+        return _current_run_telemetry.get(None)
+    except Exception:
+        return None
+
+
 # ── Internal Pipeline Stages ─────────────────────────────────────────
 
 
@@ -42,6 +51,9 @@ async def _run_discovery(
     resolved_models: dict[str, str],
 ) -> dict:
     """Run Discovery phase: Agents 1-4 (classic) or Hive Discovery (swarm)."""
+    rt = _get_run_telemetry()
+    if rt:
+        rt.set_phase("discovery")
 
     # ── Swarm mode: delegate to Hive Discovery ───────────────────────
     if cfg.discovery_mode == "swarm":
@@ -175,6 +187,8 @@ async def _run_discovery(
         state.quality_findings +
         state.architecture_findings
     )
+    if rt:
+        rt.update_findings_progress(total=len(state.all_findings))
     emit_phase_complete(
         cfg, "discovery",
         f"Agents 2-4 complete. {len(state.all_findings)} total findings.",
@@ -353,6 +367,9 @@ async def _run_triage(
     In swarm mode, triage and planning are already done by the synthesis
     agent in Layer 2. Skip if state already has triage + plan.
     """
+    rt = _get_run_telemetry()
+    if rt:
+        rt.set_phase("triage")
     invocations = 0
 
     if not state.all_findings:
@@ -499,6 +516,9 @@ async def _run_remediation(
     from forge.execution.tier_router import route_plan_items
     from forge.execution.forge_executor import execute_remediation
 
+    rt = _get_run_telemetry()
+    if rt:
+        rt.set_phase("remediation")
     invocations = 0
 
     if not state.remediation_plan or not state.remediation_plan.items:
@@ -563,6 +583,12 @@ async def _run_remediation(
             await _run_tier3_via_forge(app, state, cfg, resolved_models, tier3_items)
             invocations += state.total_agent_invocations
 
+    if rt:
+        rt.update_findings_progress(
+            fixed=len(state.completed_fixes),
+            deferred=len(state.outer_loop.deferred_findings),
+        )
+
     logger.info(
         "Remediation complete: %d fixed, %d deferred",
         len(state.completed_fixes), len(state.outer_loop.deferred_findings),
@@ -600,6 +626,9 @@ async def _run_validation(
     resolved_models: dict[str, str],
 ) -> dict:
     """Run Validation phase: Agents 11-12."""
+    rt = _get_run_telemetry()
+    if rt:
+        rt.set_phase("validation")
     invocations = 0
 
     if not state.completed_fixes:
