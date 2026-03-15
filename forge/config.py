@@ -121,6 +121,11 @@ class ForgeConfig(BaseModel):
     skip_tiers: list[int] = []  # e.g. [0] to process even invalid findings
     focus_categories: list[str] = []  # e.g. ["security"] to only fix security
 
+    # ── Budget / Circuit Breakers ────────────────────────────────────
+    max_cost_usd: float = 5.0           # Hard cap — kills run immediately
+    max_duration_seconds: float = 1800.0  # 30 min hard cap
+    cost_warning_threshold: float = 0.8  # Log warning at 80% of budget
+
     # ── Hive Discovery (swarm architecture) ─────────────────────────
     discovery_mode: Literal["classic", "swarm"] = "classic"
     swarm_target_segments: int = 5  # Target number of segments for community detection
