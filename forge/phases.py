@@ -19,6 +19,7 @@ from forge.execution.events import emit_phase_complete, emit_phase_start
 from forge.schemas import (
     AuditFinding,
     CodebaseMap,
+    FixOutcome,
     ForgeExecutionState,
     IntegrationValidationResult,
     ProductionReadinessReport,
@@ -558,8 +559,12 @@ async def _run_remediation(
             invocations += state.total_agent_invocations
 
     if rt:
+        actually_fixed = [
+            f for f in state.completed_fixes
+            if f.outcome in (FixOutcome.COMPLETED, FixOutcome.COMPLETED_WITH_DEBT)
+        ]
         rt.update_findings_progress(
-            fixed=len(state.completed_fixes),
+            fixed=len(actually_fixed),
             deferred=len(state.outer_loop.deferred_findings),
         )
 
