@@ -7,6 +7,7 @@ import os
 import pytest
 
 from forge.execution.sweaf_adapter import (
+    build_plan_result,
     compute_execution_levels,
     finding_to_planned_issue,
     sweaf_result_to_coder_fix_results,
@@ -232,3 +233,79 @@ class TestWriteIssueFiles:
         assert "Parameterize queries" in content
         assert "- [ ] No SQL injection" in content
         assert "- `src/db.py`" in content
+
+
+class TestTier2FindingToPlannedIssue:
+    """Verify that Tier 2 (scoped) findings convert correctly to SWE-AF issues."""
+
+    def test_tier2_finding_to_planned_issue(self):
+        """Tier 2 items with simpler findings should produce valid planned issues."""
+        finding = AuditFinding(
+            id="F-T2-001",
+            title="Missing input validation",
+            description="User input not validated before DB query",
+            category=FindingCategory.QUALITY,
+            severity=FindingSeverity.MEDIUM,
+            locations=[FindingLocation(file_path="src/routes.py", line_start=15)],
+        )
+        item = RemediationItem(
+            finding_id="F-T2-001",
+            title="Add input validation",
+            tier=RemediationTier.TIER_2,
+            priority=1,
+            files_to_modify=["src/routes.py"],
+        )
+
+        issue = finding_to_planned_issue(item, finding)
+
+        assert issue["name"] == "fix-f-t2-001"
+        assert issue["title"] == "Add input validation"
+        assert "src/routes.py" in issue["files_to_modify"]
+        assert "User input not validated" in issue["description"]
+        # Tier 2 items should have simpler default acceptance criteria
+        assert len(issue["acceptance_criteria"]) >= 1
+
+    def test_tier2_no_locations_uses_files_to_modify(self):
+        """When finding has no locations, files_to_modify from item is used."""
+        finding = AuditFinding(
+            id="F-T2-002",
+            title="Simple fix",
+            description="A simple issue",
+            category=FindingCategory.QUALITY,
+            severity=FindingSeverity.LOW,
+            locations=[],
+        )
+        item = RemediationItem(
+            finding_id="F-T2-002",
+            title="Fix it",
+            tier=RemediationTier.TIER_2,
+            priority=1,
+            files_to_modify=["src/utils.py"],
+        )
+
+        issue = finding_to_planned_issue(item, finding)
+
+        assert issue["files_to_modify"] == ["src/utils.py"]
+
+
+class TestBuildPlanResult:
+    def test_model_override_in_plan_result(self):
+        """build_plan_result should set model_override to minimax/minimax-m2.5."""
+        issues = [
+            {"name": "fix-a", "depends_on": []},
+            {"name": "fix-b", "depends_on": ["fix-a"]},
+        ]
+        result = build_plan_result(issues, "/tmp/artifacts")
+
+        assert result["model_override"] == "minimax/minimax-m2.5"
+        assert result["artifacts_dir"] == "/tmp/artifacts"
+        assert len(result["issues"]) == 2
+        assert len(result["levels"]) == 2  # fix-a first, then fix-b
+
+    def test_plan_result_has_required_keys(self):
+        """plan_result must have all keys SWE-AF expects."""
+        issues = [{"name": "fix-x", "depends_on": []}]
+        result = build_plan_result(issues, "/tmp/art")
+
+        for key in ("issues", "levels", "artifacts_dir", "prd", "architecture", "model_override"):
+            assert key in result, f"Missing key: {key}"

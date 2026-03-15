@@ -50,7 +50,6 @@ def _make_state(repo_path="/tmp/test-repo"):
 
 def _make_cfg():
     return ForgeConfig(
-        sweaf_enabled=True,
         sweaf_agentfield_url="http://localhost:8080",
         sweaf_api_key="test-key",
         sweaf_timeout_seconds=30,
@@ -113,7 +112,6 @@ class TestSweafBridgeIntegration:
         item = _make_item()
         state = _make_state(str(tmp_path))
         cfg = ForgeConfig(
-            sweaf_enabled=True,
             sweaf_agentfield_url="http://localhost:8080",
             sweaf_api_key="test-key",
             sweaf_timeout_seconds=0,
@@ -176,3 +174,51 @@ class TestSweafBridgeIntegration:
         outcomes = {r.finding_id: r.outcome for r in results}
         assert outcomes["F-001"] == FixOutcome.COMPLETED
         assert outcomes["F-002"] == FixOutcome.FAILED_RETRYABLE
+
+    def test_budget_passthrough(self, tmp_path):
+        """Remaining budget from RunTelemetry is passed in POST payload."""
+        finding = _make_finding()
+        item = _make_item()
+        state = _make_state(str(tmp_path))
+        cfg = _make_cfg()
+
+        # Track what payload was sent
+        captured_payloads = []
+
+        responses = [
+            {"execution_id": "exec-budget"},
+            {
+                "status": "completed",
+                "result": {
+                    "issues": {
+                        "fix-f-001": {"status": "completed", "summary": "Fixed"},
+                    },
+                },
+            },
+        ]
+
+        original_mock = _mock_urlopen(responses)
+
+        def capturing_urlopen(req, timeout=30):
+            if req.method == "POST" and req.data:
+                captured_payloads.append(json.loads(req.data.decode()))
+            return original_mock(req, timeout=timeout)
+
+        # Set up RunTelemetry with $5 budget, $2 already spent
+        from forge.execution.run_telemetry import RunTelemetry, _current_run_telemetry
+        rt = RunTelemetry(str(tmp_path / "telemetry"), max_cost_usd=5.0)
+        rt.total_cost_usd = 2.0
+        token = _current_run_telemetry.set(rt)
+
+        try:
+            with patch("forge.execution.sweaf_bridge.urllib.request.urlopen", side_effect=capturing_urlopen), \
+                 patch("forge.execution.sweaf_bridge._POLL_INTERVAL", 0.01):
+
+                asyncio.run(execute_tier3_via_sweaf([item], [finding], state, cfg))
+
+            assert len(captured_payloads) == 1
+            sent_max_cost = captured_payloads[0]["max_cost_usd"]
+            # Should be capped to remaining $3.00 (not the config default $10.00)
+            assert sent_max_cost == pytest.approx(3.0, abs=0.01)
+        finally:
+            _current_run_telemetry.reset(token)
