@@ -97,6 +97,9 @@ class AgentAI:
         # ── Auto-instrument: log to active telemetry context ────────
         _auto_log_invocation(self.config, response)
 
+        # ── Record to RunTelemetry (real-time observable state) ────
+        await _record_to_run_telemetry(self.config, response)
+
         return response
 
 
@@ -140,6 +143,48 @@ def _auto_log_invocation(
         latency_ms=metrics.duration_ms,
         success=not response.is_error,
         error=str(response.messages[-1].error) if response.is_error and response.messages else "",
+    )
+
+
+async def _record_to_run_telemetry(
+    config: AgentAIConfig,
+    response: AgentResponse,
+) -> None:
+    """Record invocation to RunTelemetry (real-time circuit-breaker telemetry).
+
+    RunTelemetry is separate from ForgeTelemetry — it provides real-time
+    observable state with disk persistence and budget circuit breakers.
+    If no RunTelemetry contextvar is active, this is a no-op.
+    """
+    from forge.execution.run_telemetry import _current_run_telemetry
+
+    rt = _current_run_telemetry.get(None)
+    if rt is None:
+        return
+
+    metrics = response.metrics
+    usage = metrics.usage or {}
+    input_tokens = usage.get("input_tokens", 0)
+    output_tokens = usage.get("output_tokens", 0)
+
+    if not input_tokens and not output_tokens:
+        total = usage.get("total_tokens", 0)
+        if total:
+            input_tokens = int(total * 0.7)
+            output_tokens = total - input_tokens
+
+    # Estimate cost from the existing telemetry pricing table
+    from forge.execution.telemetry import MODEL_PRICING, DEFAULT_PRICING
+    pricing = MODEL_PRICING.get(config.model, DEFAULT_PRICING)
+    cost = (input_tokens * pricing[0] + output_tokens * pricing[1]) / 1_000_000
+
+    await rt.record_invocation(
+        agent_name=config.agent_name or "unknown",
+        model=config.model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cost_usd=cost,
+        success=not response.is_error,
     )
 
 
