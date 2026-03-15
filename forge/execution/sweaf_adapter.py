@@ -24,8 +24,9 @@ def finding_to_planned_issue(
 ) -> dict[str, Any]:
     """Map a FORGE RemediationItem + AuditFinding to a SWE-AF PlannedIssue dict.
 
-    Packs all security context into the description so SWE-AF's coder
-    has full context without needing FORGE's schema.
+    Handles both Tier 2 (scoped, 1-3 files) and Tier 3 (architectural, 5-15
+    files) items. Packs all security context into the description so SWE-AF's
+    coder has full context without needing FORGE's schema.
     """
     # Build rich description with all security context
     desc_parts = [finding.description]
@@ -163,6 +164,26 @@ def compute_execution_levels(issues: list[dict[str, Any]]) -> list[list[str]]:
         return [list(all_names)]
 
     return levels
+
+
+def build_plan_result(
+    issues: list[dict[str, Any]],
+    artifacts_dir: str,
+) -> dict[str, Any]:
+    """Build a SWE-AF plan_result dict with M2.5 model override.
+
+    Sets model_override to minimax/minimax-m2.5 so SWE-AF workers use
+    the cheap, fast model for all edit tasks.
+    """
+    levels = compute_execution_levels(issues)
+    return {
+        "issues": issues,
+        "levels": levels,
+        "artifacts_dir": artifacts_dir,
+        "prd": {},
+        "architecture": {},
+        "model_override": "minimax/minimax-m2.5",
+    }
 
 
 def sweaf_result_to_coder_fix_results(
