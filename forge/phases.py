@@ -512,9 +512,8 @@ async def _run_remediation(
     cfg: ForgeConfig,
     resolved_models: dict[str, str],
 ) -> dict:
-    """Run Remediation phase: Tier routing + Agents 7-10 via control loops."""
+    """Run Remediation phase: Tier routing + SWE-AF execution for all AI items."""
     from forge.execution.tier_router import route_plan_items
-    from forge.execution.forge_executor import execute_remediation
 
     rt = _get_run_telemetry()
     if rt:
@@ -527,7 +526,7 @@ async def _run_remediation(
 
     # ── Step 3a: Tier 0/1 — deterministic fixes ──────────────────────
     logger.info("Remediation: routing %d items through tier router", len(state.remediation_plan.items))
-    handled, tier2_items, tier3_items = route_plan_items(
+    handled, sweaf_items = route_plan_items(
         state.remediation_plan,
         state.all_findings,
         state,
@@ -536,51 +535,26 @@ async def _run_remediation(
     )
     invocations += len(handled)  # Tier 0/1 count as 1 invocation each
 
-    if not tier2_items and not tier3_items:
+    if not sweaf_items:
         logger.info("Remediation: all items handled by Tier 0/1 — skipping AI pipeline")
         return {"invocations": invocations}
 
-    # ── Step 3b: Tier 2 — FORGE executor (scoped fixes) ──────────────
-    if tier2_items:
-        ai_plan = RemediationPlan(
-            items=tier2_items,
-            execution_levels=_filter_execution_levels(
-                state.remediation_plan.execution_levels,
-                {item.finding_id for item in tier2_items},
-            ),
-            total_items=len(tier2_items),
+    # ── Step 3b: ALL AI items (Tier 2 + Tier 3) → SWE-AF ────────────
+    try:
+        from forge.execution.sweaf_bridge import execute_tier3_via_sweaf
+        logger.info("Remediation: routing %d AI items to SWE-AF", len(sweaf_items))
+        results = await execute_tier3_via_sweaf(
+            sweaf_items, state.all_findings, state, cfg,
         )
-        state.remediation_plan = ai_plan
-
-        logger.info(
-            "Remediation: executing %d Tier 2 items across %d levels",
-            len(tier2_items), len(ai_plan.execution_levels),
-        )
-
-        await execute_remediation(app, NODE_ID, state, cfg, resolved_models)
-        invocations += state.total_agent_invocations
-
-    # ── Step 3c: Tier 3 — SWE-AF or FORGE fallback ──────────────────
-    if tier3_items:
-        if cfg.sweaf_enabled:
-            try:
-                from forge.execution.sweaf_bridge import execute_tier3_via_sweaf
-                logger.info("Remediation: routing %d Tier 3 items to SWE-AF", len(tier3_items))
-                results = await execute_tier3_via_sweaf(
-                    tier3_items, state.all_findings, state, cfg,
-                )
-                state.completed_fixes.extend(results)
-                invocations += len(tier3_items)
-            except Exception as e:
-                logger.error("SWE-AF dispatch failed: %s", e)
-                if cfg.sweaf_fallback_to_forge:
-                    logger.info("Falling back to FORGE for %d Tier 3 items", len(tier3_items))
-                    await _run_tier3_via_forge(
-                        app, state, cfg, resolved_models, tier3_items,
-                    )
-                    invocations += state.total_agent_invocations
-        else:
-            await _run_tier3_via_forge(app, state, cfg, resolved_models, tier3_items)
+        state.completed_fixes.extend(results)
+        invocations += len(sweaf_items)
+    except Exception as e:
+        logger.error("SWE-AF dispatch failed: %s", e)
+        if cfg.sweaf_fallback_to_forge:
+            logger.info("Falling back to FORGE executor for %d items", len(sweaf_items))
+            await _run_sweaf_fallback_via_forge(
+                app, state, cfg, resolved_models, sweaf_items,
+            )
             invocations += state.total_agent_invocations
 
     if rt:
@@ -597,23 +571,23 @@ async def _run_remediation(
     return {"invocations": invocations}
 
 
-async def _run_tier3_via_forge(
+async def _run_sweaf_fallback_via_forge(
     app,
     state: ForgeExecutionState,
     cfg: ForgeConfig,
     resolved_models: dict[str, str],
-    tier3_items: list,
+    sweaf_items: list,
 ) -> None:
-    """Fall back to FORGE executor for Tier 3 items when SWE-AF is unavailable."""
+    """Fall back to FORGE executor when SWE-AF is unavailable."""
     from forge.execution.forge_executor import execute_remediation
 
     ai_plan = RemediationPlan(
-        items=tier3_items,
+        items=sweaf_items,
         execution_levels=_filter_execution_levels(
             state.remediation_plan.execution_levels if state.remediation_plan else [],
-            {item.finding_id for item in tier3_items},
+            {item.finding_id for item in sweaf_items},
         ),
-        total_items=len(tier3_items),
+        total_items=len(sweaf_items),
     )
     state.remediation_plan = ai_plan
     await execute_remediation(app, NODE_ID, state, cfg, resolved_models)
