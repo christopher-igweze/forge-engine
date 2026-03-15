@@ -147,8 +147,7 @@ class ForgeConfig(BaseModel):
     enable_regression_check: bool = True
     regression_test_timeout: int = 180  # seconds for full suite run
 
-    # ── SWE-AF Integration (Tier 3) ──────────────────────────────────
-    sweaf_enabled: bool = False
+    # ── SWE-AF Integration (all AI remediation) ────────────────────────
     sweaf_agentfield_url: str = ""
     sweaf_api_key: str = ""
     sweaf_node_id: str = "swe-planner"
