@@ -1,9 +1,10 @@
-"""Prompt templates for Agents 7/8: Coder (Tier 2 and Tier 3).
+"""DEPRECATED: Only used as fallback when SWE-AF is unavailable.
 
-Tier 2: Scoped fixes, 1-3 files, surgical changes.
-Tier 3: Architectural fixes, 5-15 files, cross-cutting concerns.
+All AI remediation (Tier 2 + Tier 3) now routes through SWE-AF's DAG
+executor. These prompts are retained only for the FORGE executor
+fallback path (sweaf_fallback_to_forge=True).
 
-Model: Claude Sonnet 4.6 (NON-NEGOTIABLE for both tiers).
+Original purpose: Prompt templates for Agents 7/8: Coder (Tier 2 and Tier 3).
 """
 
 _NOTEBOOK_GUIDANCE = """
