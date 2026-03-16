@@ -53,6 +53,24 @@ def _machine_id() -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
+def _detect_git_remote(repo_path: str) -> str:
+    """Try to get the git remote URL for a repo."""
+    try:
+        import subprocess
+
+        result = subprocess.run(
+            ["git", "-C", repo_path, "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
 async def _send_telemetry(event: str, data: dict) -> None:
     """Fire-and-forget telemetry POST to vibe2prod API."""
     try:
@@ -71,6 +89,46 @@ async def _send_telemetry(event: str, data: dict) -> None:
             )
     except Exception:
         pass  # Never fail on telemetry
+
+
+async def _sync_scan_to_dashboard(
+    repo_path: str,
+    discovery_report: dict,
+    cost_usd: float,
+    duration_seconds: float,
+    model: str,
+) -> None:
+    """POST full scan report to vibe2prod so it appears in the dashboard.
+
+    Only works when VIBE2PROD_API_KEY is set (user linked their account).
+    """
+    if not _VIBE2PROD_API_KEY:
+        return
+    try:
+        import httpx
+
+        repo_url = _detect_git_remote(repo_path)
+        repo_name = Path(repo_path).name
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(
+                f"{_VIBE2PROD_URL}/api/cli/scan-report",
+                json={
+                    "repo_url": repo_url or f"local://{repo_name}",
+                    "repo_name": repo_name,
+                    "discovery_report": discovery_report,
+                    "cost_usd": cost_usd,
+                    "duration_seconds": duration_seconds,
+                    "model": model,
+                    "version": "1.0.0",
+                },
+                headers={
+                    "Content-Type": "application/json",
+                    "X-API-Key": _VIBE2PROD_API_KEY,
+                },
+            )
+    except Exception:
+        pass  # Never fail on dashboard sync
 
 
 @mcp.tool()
@@ -116,15 +174,27 @@ async def forge_scan(path: str, model: str | None = None) -> dict:
     report = result.model_dump(mode="json")
     duration = time.monotonic() - start
 
-    # Send telemetry (fire-and-forget)
+    effective_model = model or "minimax/minimax-m2.5"
+    cost = report.get("cost_usd", 0)
+
+    # Send anonymous telemetry (fire-and-forget)
     await _send_telemetry("scan_complete", {
         "version": "1.0.0",
-        "model": model or "minimax/minimax-m2.5",
+        "model": effective_model,
         "mode": "cli_discovery",
         "findings_count": report.get("total_findings", 0),
         "duration_seconds": round(duration, 2),
-        "cost_usd": report.get("cost_usd", 0),
+        "cost_usd": cost,
     })
+
+    # Sync full report to dashboard (if API key is set)
+    await _sync_scan_to_dashboard(
+        repo_path=repo_path,
+        discovery_report=report.get("discovery_report", report),
+        cost_usd=cost,
+        duration_seconds=round(duration, 2),
+        model=effective_model,
+    )
 
     return report
 
