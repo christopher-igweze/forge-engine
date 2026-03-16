@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 
 from forge.config import ForgeConfig
@@ -56,20 +57,35 @@ def _make_cfg():
     )
 
 
-def _mock_urlopen(responses):
-    """Create a mock urlopen that returns different responses on successive calls."""
+def _make_response(status_code: int, json_data: dict) -> httpx.Response:
+    """Create an httpx.Response with a request set so raise_for_status works."""
+    resp = httpx.Response(status_code, json=json_data)
+    resp._request = httpx.Request("GET", "http://test")
+    return resp
+
+
+def _make_mock_client(responses: list[dict], *, post_side_effect=None):
+    """Create a mock httpx.AsyncClient that returns successive responses.
+
+    The first response is returned by POST, the rest by GET (poll calls).
+    """
     call_idx = 0
 
-    def _urlopen(req, timeout=30):
+    def _next_response(*args, **kwargs):
         nonlocal call_idx
-        resp_data = responses[min(call_idx, len(responses) - 1)]
+        data = responses[min(call_idx, len(responses) - 1)]
         call_idx += 1
-        mock_resp = MagicMock()
-        mock_resp.read.return_value = json.dumps(resp_data).encode()
-        mock_resp.status = 200
-        return mock_resp
+        return _make_response(200, data)
 
-    return _urlopen
+    mock_client = AsyncMock()
+    if post_side_effect:
+        mock_client.post = AsyncMock(side_effect=post_side_effect)
+    else:
+        mock_client.post = AsyncMock(side_effect=lambda *a, **kw: _next_response())
+    mock_client.get = AsyncMock(side_effect=lambda *a, **kw: _next_response())
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    return mock_client
 
 
 class TestSweafBridgeIntegration:
@@ -97,7 +113,9 @@ class TestSweafBridgeIntegration:
             },
         ]
 
-        with patch("forge.execution.sweaf_bridge.urllib.request.urlopen", side_effect=_mock_urlopen(responses)), \
+        mock_client = _make_mock_client(responses)
+
+        with patch("forge.execution.sweaf_bridge.httpx.AsyncClient", return_value=mock_client), \
              patch("forge.execution.sweaf_bridge._POLL_INTERVAL", 0.01):
 
             results = asyncio.run(execute_tier3_via_sweaf([item], [finding], state, cfg))
@@ -122,7 +140,9 @@ class TestSweafBridgeIntegration:
             {"status": "running"},
         ]
 
-        with patch("forge.execution.sweaf_bridge.urllib.request.urlopen", side_effect=_mock_urlopen(responses)), \
+        mock_client = _make_mock_client(responses)
+
+        with patch("forge.execution.sweaf_bridge.httpx.AsyncClient", return_value=mock_client), \
              patch("forge.execution.sweaf_bridge._POLL_INTERVAL", 0.01):
 
             results = asyncio.run(execute_tier3_via_sweaf([item], [finding], state, cfg))
@@ -137,7 +157,12 @@ class TestSweafBridgeIntegration:
         state = _make_state(str(tmp_path))
         cfg = _make_cfg()
 
-        with patch("forge.execution.sweaf_bridge.urllib.request.urlopen", side_effect=ConnectionError("refused")):
+        mock_client = _make_mock_client(
+            [],
+            post_side_effect=httpx.ConnectError("refused"),
+        )
+
+        with patch("forge.execution.sweaf_bridge.httpx.AsyncClient", return_value=mock_client):
 
             results = asyncio.run(execute_tier3_via_sweaf([item], [finding], state, cfg))
 
@@ -165,7 +190,9 @@ class TestSweafBridgeIntegration:
             },
         ]
 
-        with patch("forge.execution.sweaf_bridge.urllib.request.urlopen", side_effect=_mock_urlopen(responses)), \
+        mock_client = _make_mock_client(responses)
+
+        with patch("forge.execution.sweaf_bridge.httpx.AsyncClient", return_value=mock_client), \
              patch("forge.execution.sweaf_bridge._POLL_INTERVAL", 0.01):
 
             results = asyncio.run(execute_tier3_via_sweaf(items, findings, state, cfg))
@@ -197,12 +224,13 @@ class TestSweafBridgeIntegration:
             },
         ]
 
-        original_mock = _mock_urlopen(responses)
+        def capturing_post(*args, **kwargs):
+            json_data = kwargs.get("json")
+            if json_data:
+                captured_payloads.append(json_data)
+            return _make_response(200, responses[0])
 
-        def capturing_urlopen(req, timeout=30):
-            if req.method == "POST" and req.data:
-                captured_payloads.append(json.loads(req.data.decode()))
-            return original_mock(req, timeout=timeout)
+        mock_client = _make_mock_client(responses, post_side_effect=capturing_post)
 
         # Set up RunTelemetry with $5 budget, $2 already spent
         from forge.execution.run_telemetry import RunTelemetry, _current_run_telemetry
@@ -211,7 +239,7 @@ class TestSweafBridgeIntegration:
         token = _current_run_telemetry.set(rt)
 
         try:
-            with patch("forge.execution.sweaf_bridge.urllib.request.urlopen", side_effect=capturing_urlopen), \
+            with patch("forge.execution.sweaf_bridge.httpx.AsyncClient", return_value=mock_client), \
                  patch("forge.execution.sweaf_bridge._POLL_INTERVAL", 0.01):
 
                 asyncio.run(execute_tier3_via_sweaf([item], [finding], state, cfg))
