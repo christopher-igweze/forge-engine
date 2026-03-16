@@ -42,7 +42,7 @@ async def execute_tier3_via_sweaf(
     state: ForgeExecutionState,
     cfg: ForgeConfig,
 ) -> list[CoderFixResult]:
-    """Execute Tier 3 findings via SWE-AF's DAG executor.
+    """Execute findings via SWE-AF's DAG executor.
 
     1. Convert FORGE items to SWE-AF planned issues
     2. Write issue .md files to artifacts dir
@@ -98,21 +98,6 @@ async def _post_execution(
     """POST async execution request to AgentField. Returns execution_id."""
     url = f"{cfg.sweaf_agentfield_url}/api/v1/execute/async/{cfg.sweaf_node_id}.execute"
 
-    # Read remaining budget from RunTelemetry (if active)
-    max_cost = cfg.sweaf_max_cost_usd
-    try:
-        from forge.execution.run_telemetry import _current_run_telemetry
-        rt = _current_run_telemetry.get(None)
-        if rt is not None:
-            remaining = rt.max_cost_usd - rt.total_cost_usd
-            if remaining < max_cost:
-                max_cost = max(0.0, remaining)
-                logger.info(
-                    "SWE-AF bridge: capping cost to $%.2f (remaining budget)", max_cost,
-                )
-    except Exception:
-        pass  # RunTelemetry not available — use config default
-
     payload = json.dumps({
         "input": {
             "plan_result": plan_result,
@@ -129,16 +114,15 @@ async def _post_execution(
         },
     }).encode()
 
-    headers = {
-        "Content-Type": "application/json",
-    }
+    headers = {"Content-Type": "application/json"}
     if cfg.sweaf_api_key:
         headers["Authorization"] = f"Bearer {cfg.sweaf_api_key}"
 
     req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
 
-    loop = asyncio.get_running_loop()
-    response = await loop.run_in_executor(None, lambda: urllib.request.urlopen(req, timeout=30))
+    # Use sync urlopen — urllib is blocking anyway, and run_in_executor
+    # can deadlock with certain asyncio event loop configurations.
+    response = urllib.request.urlopen(req, timeout=30)
     body = json.loads(response.read())
 
     execution_id = body.get("execution_id", body.get("id", ""))
@@ -155,10 +139,12 @@ async def _poll_execution(
 ) -> dict[str, Any]:
     """Poll AgentField until execution completes or times out."""
     url = f"{cfg.sweaf_agentfield_url}/api/v1/executions/{execution_id}"
-    headers = {"Authorization": f"Bearer {cfg.sweaf_api_key}"}
+
+    headers = {}
+    if cfg.sweaf_api_key:
+        headers["Authorization"] = f"Bearer {cfg.sweaf_api_key}"
 
     elapsed = 0
-    loop = asyncio.get_running_loop()
 
     while elapsed < cfg.sweaf_timeout_seconds:
         await asyncio.sleep(_POLL_INTERVAL)
@@ -166,9 +152,7 @@ async def _poll_execution(
 
         try:
             req = urllib.request.Request(url, headers=headers, method="GET")
-            response = await loop.run_in_executor(
-                None, lambda: urllib.request.urlopen(req, timeout=30),
-            )
+            response = urllib.request.urlopen(req, timeout=30)
             body = json.loads(response.read())
         except Exception as e:
             logger.warning("SWE-AF bridge: poll error (will retry): %s", e)
@@ -177,7 +161,7 @@ async def _poll_execution(
         status = body.get("status", "")
         logger.debug("SWE-AF bridge: execution %s status=%s", execution_id, status)
 
-        if status in ("completed", "success"):
+        if status in ("completed", "success", "succeeded"):
             return body.get("result", body)
         if status in ("failed", "error", "cancelled"):
             raise RuntimeError(f"SWE-AF execution {execution_id} failed: {body.get('error', status)}")
