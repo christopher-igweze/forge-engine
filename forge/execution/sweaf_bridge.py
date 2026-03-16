@@ -131,8 +131,9 @@ async def _post_execution(
 
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {cfg.sweaf_api_key}",
     }
+    if cfg.sweaf_api_key:
+        headers["Authorization"] = f"Bearer {cfg.sweaf_api_key}"
 
     req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
 
