@@ -154,7 +154,7 @@ class ForgeConfig(BaseModel):
     sweaf_max_coding_iterations: int = 3
     sweaf_max_concurrent_issues: int = 3
     sweaf_runtime: Literal["claude_code", "open_code", "api"] = "api"
-    sweaf_timeout_seconds: int = 1800  # 30 min per Tier 3 batch
+    sweaf_timeout_seconds: int = 3600  # 60 min — API runtime is slower than subprocess
     sweaf_fallback_to_forge: bool = True
     sweaf_max_cost_usd: float = 10.0
 
