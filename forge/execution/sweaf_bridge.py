@@ -86,8 +86,7 @@ async def _post_execution(
     cfg: ForgeConfig,
 ) -> str:
     """POST async execution to AgentField. Returns execution_id."""
-    # Use .build (clones repo + executes) not .execute (assumes repo exists)
-    url = f"{cfg.sweaf_agentfield_url}/api/v1/execute/async/{cfg.sweaf_node_id}.build"
+    url = f"{cfg.sweaf_agentfield_url}/api/v1/execute/async/{cfg.sweaf_node_id}.execute"
 
     # SWE-AF needs a git URL to clone, not a local path
     repo_url = cfg.repo_url or ""
@@ -111,21 +110,18 @@ async def _post_execution(
         except Exception:
             pass
 
-    # Build a goal string from the findings for SWE-AF's build() reasoner
-    issues_summary = "\n".join(
-        f"- {iss.get('title', iss.get('name', ''))}" for iss in plan_result.get("issues", [])[:10]
-    )
-    goal = f"Fix the following {len(plan_result.get('issues', []))} security and quality issues:\n{issues_summary}"
-
     payload = {
         "input": {
-            "goal": goal,
-            "repo_url": repo_url,
+            "plan_result": plan_result,
+            "repo_path": f"/workspaces/{repo_url.rstrip('/').split('/')[-1].replace('.git', '')}" if repo_url else state.repo_path,
             "config": {
                 "runtime": cfg.sweaf_runtime,
                 "max_coding_iterations": cfg.sweaf_max_coding_iterations,
                 "max_cost_usd": cfg.sweaf_max_cost_usd,
                 "models": {"default": "minimax/minimax-m2.5"},
+            },
+            "git_config": {
+                "repo_url": repo_url,
             },
         },
     }
