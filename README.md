@@ -2,17 +2,38 @@
 
 **Framework for Orchestrated Remediation & Governance Engine**
 
-A 12-agent AI system that takes vibe-coded MVPs and systematically hardens them for production deployment.
+A 12-agent AI system that scans codebases for security, quality, and architecture issues — then fixes them.
+
+## Quick Start
+
+```bash
+# Install
+pip install vibe2prod
+
+# Register as MCP server in Claude Code
+claude mcp add forge -e OPENROUTER_API_KEY=your-key -- python -m forge.mcp_server
+
+# Scan a repo
+# (use the forge_scan tool in Claude Code)
+```
+
+Get an OpenRouter API key at [openrouter.ai](https://openrouter.ai) (free signup).
+
+### The /forge Skill
+
+After scanning, use the `/forge` skill in Claude Code to autonomously fix findings. It reads the scan report, prioritizes issues, and applies fixes with micro-commits.
+
+Full CLI documentation: [vibe2prod.net/cli](https://vibe2prod.net/cli)
 
 ## Architecture
 
 ```
 Discovery (Agents 1-4)     Scan codebase, identify issues
-    ↓
+    |
 Triage (Agents 5-6)        Classify by complexity tier (0-3), plan fixes
-    ↓
+    |
 Remediation (Agents 7-10)  Apply fixes via three control loops
-    ↓
+    |
 Validation (Agents 11-12)  Verify fixes, generate readiness report
 ```
 
@@ -35,7 +56,7 @@ Validation (Agents 11-12)  Verify fixes, generate readiness report
 
 ### Control Loops
 
-- **Inner Loop**: Coder → Review → Retry (max 3 iterations)
+- **Inner Loop**: Coder -> Review -> Retry (max 3 iterations)
 - **Middle Loop**: Escalation when inner loop exhausted (RECLASSIFY / DEFER)
 - **Outer Loop**: Re-plan with Fix Strategist (max 1 replan)
 
@@ -76,19 +97,9 @@ forge-engine
 
 FORGE registers as an AgentField node (`forge-engine`) and exposes three reasoners:
 
-- `remediate` — Full pipeline: scan → triage → fix → validate
-- `discover` — Scan-only mode (Agents 1-6, no fixes). Produces JSON + HTML discovery reports with architecture context, LOC, and remediation plan
+- `remediate` — Full pipeline: scan -> triage -> fix -> validate
+- `discover` — Scan-only mode (Agents 1-6, no fixes)
 - `scan` — Alias for discover (free tier)
-
-### Discovery Mode
-
-Run discovery-only (scan + triage, no fixes) to produce a findings report:
-
-```bash
-vibe2prod scan ./my-app
-```
-
-This runs Agents 1-6 and generates HTML/JSON reports including architecture context (modules, entry points, data flows, auth boundaries), per-finding ripple tags, and a remediation plan table.
 
 ### Hive Discovery (Swarm Mode)
 
@@ -98,7 +109,7 @@ An alternative discovery architecture using a three-layer swarm approach:
 config = {"discovery_mode": "swarm"}  # default: "classic"
 ```
 
-Hive replaces the serial Agent 1 → parallel Agents 2-4 flow with: deterministic code graph (Layer 0) → parallel swarm workers per segment (Layer 1) → single Sonnet synthesis (Layer 2). See `doc/hive-discovery-spec.md` for the full design.
+See `doc/hive-discovery-spec.md` for the full design.
 
 ## Configuration
 
@@ -120,8 +131,6 @@ Resolution: `defaults` < `models.default` < `models.<role>`
 
 FORGE normalizes LLM outputs before validation to handle model inconsistencies:
 
-- **Category aliases**: LLM-returned categories like `code_patterns`, `error_handling`, `input_validation` are mapped to canonical categories (`quality`, `reliability`, `security`) via `_CATEGORY_ALIASES`
-- **Priority floor**: Priorities < 1 are clamped to 1 before `RemediationPlan` validation
+- **Category aliases**: LLM-returned categories are mapped to canonical categories (`quality`, `reliability`, `security`) via `_CATEGORY_ALIASES`
+- **Priority floor**: Priorities < 1 are clamped to 1 before validation
 - **Dependency coercion**: `depends_on_finding_id` returned as a list is coerced to a string
-
-These normalizations are applied at all parsing sites across discovery and triage.
