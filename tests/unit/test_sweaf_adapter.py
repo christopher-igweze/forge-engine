@@ -176,9 +176,11 @@ class TestComputeExecutionLevels:
 class TestSweafResultMapping:
     def test_completed_maps_to_completed(self):
         result = {
-            "issues": {
-                "fix-f-001": {"status": "completed", "files_changed": ["src/auth.py"], "summary": "Fixed"},
-            },
+            "completed_issues": [
+                {"issue_name": "fix-f-001", "outcome": "completed", "files_changed": ["src/auth.py"], "result_summary": "Fixed"},
+            ],
+            "failed_issues": [],
+            "skipped_issues": [],
         }
         findings = {"F-001": _make_finding()}
 
@@ -189,9 +191,11 @@ class TestSweafResultMapping:
 
     def test_partial_maps_to_debt(self):
         result = {
-            "issues": {
-                "fix-f-001": {"status": "partial", "summary": "Partial fix"},
-            },
+            "completed_issues": [
+                {"issue_name": "fix-f-001", "outcome": "partial", "files_changed": [], "result_summary": "Partial fix"},
+            ],
+            "failed_issues": [],
+            "skipped_issues": [],
         }
         findings = {"F-001": _make_finding()}
 
@@ -200,9 +204,11 @@ class TestSweafResultMapping:
 
     def test_failed_maps_to_failed_retryable(self):
         result = {
-            "issues": {
-                "fix-f-001": {"status": "failed", "summary": "Could not fix"},
-            },
+            "completed_issues": [],
+            "failed_issues": [
+                {"issue_name": "fix-f-001", "outcome": "failed", "files_changed": [], "result_summary": "Could not fix"},
+            ],
+            "skipped_issues": [],
         }
         findings = {"F-001": _make_finding()}
 
