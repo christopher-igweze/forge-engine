@@ -217,8 +217,8 @@ class TestSweafBridgeIntegration:
                 asyncio.run(execute_tier3_via_sweaf([item], [finding], state, cfg))
 
             assert len(captured_payloads) == 1
-            sent_max_cost = captured_payloads[0]["input"]["config"]["max_cost_usd"]
-            # Should be capped to remaining $3.00 (not the config default $10.00)
-            assert sent_max_cost == pytest.approx(3.0, abs=0.01)
+            # Verify payload has input.config but no max_cost_usd (removed — SWE-AF rejects it)
+            assert "config" in captured_payloads[0]["input"]
+            assert "max_cost_usd" not in captured_payloads[0]["input"]["config"]
         finally:
             _current_run_telemetry.reset(token)
