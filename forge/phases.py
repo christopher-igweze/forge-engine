@@ -543,13 +543,19 @@ async def _run_remediation(
     # ── Step 3b: ALL AI items (Tier 2 + Tier 3) → SWE-AF ────────────
     try:
         from forge.execution.sweaf_bridge import execute_tier3_via_sweaf
+        print(f"[FORGE] Remediation: routing {len(sweaf_items)} AI items to SWE-AF", flush=True)
         logger.info("Remediation: routing %d AI items to SWE-AF", len(sweaf_items))
         results = await execute_tier3_via_sweaf(
             sweaf_items, state.all_findings, state, cfg,
         )
+        print(f"[FORGE] SWE-AF returned {len(results)} results", flush=True)
+        for r in results[:3]:
+            print(f"[FORGE]   {r.finding_id}: {r.outcome}", flush=True)
         state.completed_fixes.extend(results)
         invocations += len(sweaf_items)
     except Exception as e:
+        print(f"[FORGE] SWE-AF dispatch EXCEPTION: {e}", flush=True)
+        import traceback; traceback.print_exc()
         logger.error("SWE-AF dispatch failed: %s", e)
         if cfg.sweaf_fallback_to_forge:
             logger.info("Falling back to FORGE executor for %d items", len(sweaf_items))

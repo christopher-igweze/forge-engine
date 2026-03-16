@@ -199,43 +199,64 @@ def sweaf_result_to_coder_fix_results(
     """
     results: list[CoderFixResult] = []
 
-    # SWE-AF returns "all_issues" as a list of dicts with "name" field
-    issues = sweaf_result.get("all_issues") or sweaf_result.get("issues", {})
-    if isinstance(issues, list):
-        issues = {i.get("name", ""): i for i in issues if isinstance(i, dict)}
+    # SWE-AF result structure:
+    # - completed_issues: list of dicts with {issue_name, outcome, files_changed, result_summary, ...}
+    # - failed_issues: list of dicts with same structure
+    # - skipped_issues: list of strings (issue names)
+    # - all_issues: list of INPUT dicts (no outcome) — NOT useful for results
+    completed = sweaf_result.get("completed_issues", [])
+    failed = sweaf_result.get("failed_issues", [])
+    skipped = sweaf_result.get("skipped_issues", [])
 
-    for issue_name, outcome in issues.items():
-        # Extract finding_id from issue name: "fix-f-abc123" -> "F-abc123"
+    # Process completed issues
+    for issue in completed:
+        if isinstance(issue, str):
+            issue = {"issue_name": issue, "outcome": "completed"}
+        issue_name = issue.get("issue_name", issue.get("name", ""))
         raw_id = issue_name.removeprefix("fix-")
-        # Restore original case: "f-abc123" -> "F-abc123"
         finding_id = raw_id[0].upper() + raw_id[1:] if raw_id else raw_id
 
-        if isinstance(outcome, str):
-            status = outcome
-            files_changed: list[str] = []
-            summary = ""
-        elif isinstance(outcome, dict):
-            status = outcome.get("status", "failed")
-            files_changed = outcome.get("files_changed", [])
-            summary = outcome.get("summary", "")
-        else:
-            status = "failed"
-            files_changed = []
-            summary = ""
+        outcome = issue.get("outcome", "completed")
+        files_changed = issue.get("files_changed", [])
+        summary = issue.get("result_summary", "")
 
-        # Map status
-        if status in ("completed", "success"):
+        if outcome in ("completed", "success"):
             fix_outcome = FixOutcome.COMPLETED
-        elif status in ("partial", "completed_with_debt"):
+        elif outcome in ("completed_with_debt", "partial"):
             fix_outcome = FixOutcome.COMPLETED_WITH_DEBT
         else:
-            fix_outcome = FixOutcome.FAILED_RETRYABLE
+            fix_outcome = FixOutcome.COMPLETED
 
         results.append(CoderFixResult(
             finding_id=finding_id,
             outcome=fix_outcome,
             files_changed=files_changed,
-            summary=summary or f"SWE-AF: {status}",
+            summary=summary or f"SWE-AF: {outcome}",
+        ))
+
+    # Process failed issues
+    for issue in failed:
+        if isinstance(issue, str):
+            issue = {"issue_name": issue}
+        issue_name = issue.get("issue_name", issue.get("name", ""))
+        raw_id = issue_name.removeprefix("fix-")
+        finding_id = raw_id[0].upper() + raw_id[1:] if raw_id else raw_id
+        results.append(CoderFixResult(
+            finding_id=finding_id,
+            outcome=FixOutcome.FAILED_RETRYABLE,
+            summary=issue.get("result_summary", issue.get("error_message", "SWE-AF: failed")),
+        ))
+
+    # Process skipped issues
+    for issue_name in skipped:
+        if isinstance(issue_name, dict):
+            issue_name = issue_name.get("issue_name", issue_name.get("name", ""))
+        raw_id = str(issue_name).removeprefix("fix-")
+        finding_id = raw_id[0].upper() + raw_id[1:] if raw_id else raw_id
+        results.append(CoderFixResult(
+            finding_id=finding_id,
+            outcome=FixOutcome.FAILED_RETRYABLE,
+            summary="SWE-AF: skipped",
         ))
 
     return results
