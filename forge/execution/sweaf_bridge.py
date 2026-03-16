@@ -88,10 +88,33 @@ async def _post_execution(
     """POST async execution to AgentField. Returns execution_id."""
     url = f"{cfg.sweaf_agentfield_url}/api/v1/execute/async/{cfg.sweaf_node_id}.execute"
 
+    # SWE-AF needs a git URL to clone, not a local path
+    repo_url = cfg.repo_url or ""
+    if not repo_url:
+        # Try to detect git remote from the local repo
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["git", "-C", state.repo_path, "remote", "get-url", "origin"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                repo_url = result.stdout.strip()
+                # Convert SSH to HTTPS if needed
+                if repo_url.startswith("git@github.com:"):
+                    repo_url = repo_url.replace("git@github.com:", "https://github.com/")
+                if repo_url.endswith(".git"):
+                    pass  # keep it
+                else:
+                    repo_url += ".git"
+        except Exception:
+            pass
+
     payload = {
         "input": {
             "plan_result": plan_result,
-            "repo_path": state.repo_path,
+            "repo_url": repo_url,
+            "repo_path": repo_url or state.repo_path,
             "config": {
                 "runtime": cfg.sweaf_runtime,
                 "max_coding_iterations": cfg.sweaf_max_coding_iterations,
@@ -99,7 +122,7 @@ async def _post_execution(
                 "models": {"default": "minimax/minimax-m2.5"},
             },
             "git_config": {
-                "repo_url": cfg.repo_url,
+                "repo_url": repo_url,
             },
         },
     }
