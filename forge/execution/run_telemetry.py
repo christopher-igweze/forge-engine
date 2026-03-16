@@ -206,9 +206,9 @@ class RunTelemetry:
             "elapsed_seconds": round(elapsed, 1),
             "elapsed_human": f"{int(elapsed // 60)}m {int(elapsed % 60)}s",
             "budget": {
-                "cost_spent": round(self.total_cost_usd, 4),
+                "cost_spent": round(self.total_cost_usd, 6),
                 "cost_limit": self.max_cost_usd,
-                "cost_remaining": round(self.max_cost_usd - self.total_cost_usd, 4),
+                "cost_remaining": round(self.max_cost_usd - self.total_cost_usd, 6),
                 "cost_percent": round(self.total_cost_usd / self.max_cost_usd * 100, 1) if self.max_cost_usd > 0 else 0,
                 "time_spent": round(elapsed, 0),
                 "time_limit": self.max_duration_seconds,
