@@ -199,13 +199,16 @@ def sweaf_result_to_coder_fix_results(
     """
     results: list[CoderFixResult] = []
 
-    issues = sweaf_result.get("issues", {})
+    # SWE-AF returns "all_issues" as a list of dicts with "name" field
+    issues = sweaf_result.get("all_issues") or sweaf_result.get("issues", {})
     if isinstance(issues, list):
-        issues = {i.get("name", ""): i for i in issues}
+        issues = {i.get("name", ""): i for i in issues if isinstance(i, dict)}
 
     for issue_name, outcome in issues.items():
-        # Extract finding_id from issue name (fix-<finding_id>)
-        finding_id = issue_name.removeprefix("fix-").upper()
+        # Extract finding_id from issue name: "fix-f-abc123" -> "F-abc123"
+        raw_id = issue_name.removeprefix("fix-")
+        # Restore original case: "f-abc123" -> "F-abc123"
+        finding_id = raw_id[0].upper() + raw_id[1:] if raw_id else raw_id
 
         if isinstance(outcome, str):
             status = outcome
