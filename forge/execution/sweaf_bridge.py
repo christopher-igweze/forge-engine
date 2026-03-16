@@ -95,7 +95,7 @@ async def _post_execution(
             "config": {
                 "runtime": cfg.sweaf_runtime,
                 "max_coding_iterations": cfg.sweaf_max_coding_iterations,
-                "max_concurrent_issues": cfg.sweaf_max_concurrent_issues,
+                "max_cost_usd": cfg.sweaf_max_cost_usd,
                 "models": {"default": "minimax/minimax-m2.5"},
             },
             "git_config": {
