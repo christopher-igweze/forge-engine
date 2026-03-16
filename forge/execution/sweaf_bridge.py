@@ -86,7 +86,33 @@ async def execute_tier3_via_sweaf(
         logger.error("SWE-AF bridge: polling failed: %s", e)
         return _failed_results(tier3_items, str(e))
 
-    # Step 6: Map results
+    # Step 6: Record SWE-AF cost to FORGE telemetry
+    cost_summary = result.get("cost_summary") if isinstance(result, dict) else None
+    if cost_summary:
+        try:
+            from forge.execution.run_telemetry import _current_run_telemetry
+            rt = _current_run_telemetry.get(None)
+            if rt:
+                sweaf_cost = cost_summary.get("total_cost_usd", 0)
+                sweaf_tokens = cost_summary.get("total_tokens", 0)
+                if sweaf_cost > 0:
+                    await rt.record_invocation(
+                        agent_name="sweaf_remediation",
+                        model="minimax/minimax-m2.5",
+                        input_tokens=sweaf_tokens,
+                        output_tokens=0,
+                        cost_usd=sweaf_cost,
+                    )
+                logger.info(
+                    "SWE-AF cost: $%.4f (%d tokens, %d calls)",
+                    cost_summary.get("total_cost_usd", 0),
+                    cost_summary.get("total_tokens", 0),
+                    cost_summary.get("total_invocations", 0),
+                )
+        except Exception:
+            pass
+
+    # Step 7: Map results
     return sweaf_result_to_coder_fix_results(result, finding_map)
 
 
