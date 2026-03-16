@@ -83,15 +83,15 @@ class RunTelemetry:
     # ── Circuit Breakers ──────────────────────────────────────────
 
     def check_budget(self) -> None:
-        """Raise immediately if cost or time budget exceeded."""
-        if self.total_cost_usd >= self.max_cost_usd:
+        """Raise immediately if cost or time budget exceeded. 0 = no limit."""
+        if self.max_cost_usd > 0 and self.total_cost_usd >= self.max_cost_usd:
             self._flush()
             raise CostLimitExceeded(
                 f"BUDGET EXCEEDED: ${self.total_cost_usd:.2f} >= "
                 f"${self.max_cost_usd:.2f} limit. Run killed."
             )
         elapsed = time.time() - self._start_time
-        if elapsed >= self.max_duration_seconds:
+        if self.max_duration_seconds > 0 and elapsed >= self.max_duration_seconds:
             self._flush()
             raise TimeLimitExceeded(
                 f"TIME EXCEEDED: {elapsed:.0f}s >= "

@@ -1,116 +1,45 @@
-# FORGE Autonomous Workflow
+# FORGE — Fix Issues from Scan Report
 
-Use the FORGE MCP tools to audit and harden codebases for production. This document describes the workflow for autonomous codebase remediation.
+You have a FORGE scan report with security, quality, and architecture findings. Your job is to fix them.
 
-## When to Use
+## Setup
 
-- User asks to "audit", "scan", "harden", or "check" a codebase
-- User wants to find and fix security vulnerabilities, quality issues, or architectural problems
-- User wants a Production Readiness Score
+The user should have already run `forge_scan` via MCP. The scan report is in `.artifacts/report/discovery_report.json`. If it doesn't exist, run `forge_scan(path=".")` first.
 
-## Workflow
+## Process
 
-### Step 1: Scan
-
-Run discovery to identify all issues:
-
-```
-forge_scan(path=".")
-```
-
-This takes ~30 seconds and costs ~$0.30-0.50. Returns structured findings with severity levels.
-
-### Step 2: Read and Prioritize Findings
-
-After scanning, read the detailed findings:
-
-```
-forge_findings(path=".")
-```
-
-Prioritize by severity: **critical > high > medium > low**
-
-Focus on:
-1. Security vulnerabilities (SQL injection, XSS, auth bypass, secrets in code)
-2. Missing error handling and input validation
-3. Type safety issues
-4. Test coverage gaps
-5. Architecture concerns (last priority)
-
-### Step 3: Fix Findings
-
-For each finding (starting with critical/high severity):
-1. Read the affected file(s)
-2. Apply the suggested fix or generate a correct one
-3. Run relevant tests to verify the fix
-4. Commit each fix as a micro-commit
-
-### Step 4: Verify
-
-Re-scan to measure improvement:
-
-```
-forge_scan(path=".")
-```
-
-Compare before/after:
-- Total findings count
-- Findings by severity
-- Production Readiness Score delta
-
-### Step 5: Report
-
-Present the results:
-- Findings resolved (count and list)
-- Score improvement (before -> after)
-- Estimated cost of scans
-- Remaining findings that need human review
+1. **Read the report** — Read `.artifacts/report/discovery_report.json` and parse the findings
+2. **Prioritize** — Sort by severity: critical > high > medium > low
+3. **Fix each finding** using your Edit/Write/Bash tools:
+   - Read the affected file(s) listed in the finding's `locations`
+   - Apply the fix described in `suggested_fix`
+   - Run tests if they exist (`pytest`, `npm test`, etc.)
+4. **Track progress** — After fixing each finding, note what you changed
+5. **Re-scan** — Run `forge_scan(path=".")` again to verify improvements
+6. **Report** — Show before/after: findings count, readiness score delta
 
 ## Decision Rules
 
-### Auto-Fix (Tier 1-2)
-- Security vulnerabilities: missing auth, injection flaws, exposed secrets
-- Quality issues: error handling, input validation, type safety
-- Test gaps: missing tests for critical paths
+**Auto-fix (do it):**
+- Missing error handling → add try/catch
+- Missing input validation → add validation
+- Hardcoded secrets → move to env vars
+- Missing rate limiting → add middleware
+- SQL injection → use parameterized queries
+- Missing auth checks → add middleware
+- Error information exposure → return generic messages
 
-### Flag for Human Review (Tier 3)
-- Breaking API changes
-- Architectural restructuring
-- Major dependency upgrades
-- Changes affecting external integrations
+**Flag for human (don't auto-fix):**
+- Architectural restructuring (splitting modules, changing patterns)
+- Breaking API changes (changing function signatures, endpoints)
+- Dependency upgrades (version bumps)
+- Business logic changes
 
-### Full Remediation
+## Tips
 
-For comprehensive automated fixing (12-agent pipeline):
-
-```
-forge_fix(path=".", dry_run=true)
-```
-
-Review the plan, then run without dry_run. WARNING: Takes ~25-30 minutes, costs ~$2-5.
-
-## Cost Awareness
-
-| Operation | Duration | Cost |
-|-----------|----------|------|
-| `forge_scan` | ~30s | $0.30-0.50 |
-| `forge_fix` (dry run) | ~30s | $0.30-0.50 |
-| `forge_fix` (full) | ~25-30min | $2-5 |
-| `forge_report` | instant | $0 |
-| `forge_findings` | instant | $0 |
-
-## Stop Conditions
-
-- All critical and high severity findings are resolved
-- Score improvement < 5 points between scans (diminishing returns)
-- Budget limit reached (warn user before exceeding $5 total)
-- Only Tier 3 (architectural) findings remain — flag for human review
-
-## Reading Cached Results
-
-To check results from a previous run without making API calls:
-
-```
-forge_report(path=".")    # Full report with scores
-forge_findings(path=".")  # Individual finding details
-```
+- Match the existing code style exactly
+- Don't add dependencies unless absolutely necessary
+- Run existing tests after each fix to catch regressions
+- If a fix is complex, do it in small steps and verify each one
+- Skip `info` severity findings — they're informational only
+- Use the Agent tool to parallelize independent fixes across different files

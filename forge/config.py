@@ -122,8 +122,8 @@ class ForgeConfig(BaseModel):
     focus_categories: list[str] = []  # e.g. ["security"] to only fix security
 
     # ── Budget / Circuit Breakers ────────────────────────────────────
-    max_cost_usd: float = 5.0           # Hard cap — kills run immediately
-    max_duration_seconds: float = 1800.0  # 30 min hard cap
+    max_cost_usd: float = 0.0            # 0 = no limit (user's own API key, their cost)
+    max_duration_seconds: float = 0.0     # 0 = no limit
     cost_warning_threshold: float = 0.8  # Log warning at 80% of budget
 
     # ── Hive Discovery (swarm architecture) ─────────────────────────
