@@ -22,12 +22,12 @@ def fingerprint(finding: dict) -> str:
     line_bucket = (loc.get("line_start", 0) // 10) * 10
 
     components = [
-        finding.get("category", ""),
-        finding.get("audit_pass", ""),
-        file_path,
+        finding.get("category") or "",
+        finding.get("audit_pass") or "",
+        file_path or "",
         str(line_bucket),
         norm_title,
-        finding.get("cwe_id", ""),
+        finding.get("cwe_id") or "",
     ]
     raw = "|".join(components)
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
