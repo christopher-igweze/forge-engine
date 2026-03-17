@@ -158,6 +158,14 @@ class ForgeConfig(BaseModel):
     sweaf_fallback_to_forge: bool = True
     sweaf_max_cost_usd: float = 10.0
 
+    # ── Delta Mode ─────────────────────────────────────────────────────
+    delta_mode: bool = False  # Only scan files changed since last scan
+
+    # ── Quality Gate Thresholds ───────────────────────────────────────
+    quality_gate_max_critical: int = 0       # Max new critical findings (0 = none allowed)
+    quality_gate_max_high: int = 0           # Max new high findings (0 = none allowed)
+    quality_gate_max_medium: int | None = None  # None = no limit on new medium findings
+
     # ── Convergence Loop ─────────────────────────────────────────────
     convergence_enabled: bool = True
     convergence_target_score: int = 95
