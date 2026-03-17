@@ -149,6 +149,8 @@ async def remediate(
                 app, state, cfg, resolved,
             )
             state.total_agent_invocations += discovery_result["invocations"]
+            state._v2_findings_delta = discovery_result.get("findings_delta")
+            state._v2_quality_gate = discovery_result.get("quality_gate")
             save_checkpoint(state.repo_path, CheckpointPhase.DISCOVERY, state)
 
         # ── Step 2: Triage (Agents 5-6) ────────────────────────────────
@@ -285,6 +287,11 @@ async def remediate(
         convergence_iterations=state.convergence_iteration + 1 if state.convergence_records else 0,
         readiness_report=state.readiness_report,
         discovery_report=discovery_report_data,
+        findings_delta=getattr(state, "_v2_findings_delta", None),
+        quality_gate=getattr(state, "_v2_quality_gate", None),
+        estimated_readiness_score=(
+            getattr(state, "_v2_findings_delta", {}) or {}
+        ).get("readiness", {}).get("overall_score") if getattr(state, "_v2_findings_delta", None) else None,
     )
 
     logger.info(

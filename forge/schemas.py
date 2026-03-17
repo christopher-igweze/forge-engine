@@ -625,3 +625,8 @@ class ForgeResult(BaseModel):
     cost_usd: float = 0.0
     duration_seconds: float = 0.0
     convergence_iterations: int = 0
+
+    # v2: Cross-scan finding lifecycle
+    findings_delta: dict | None = None  # new/recurring/fixed/regressed/suppressed counts
+    quality_gate: dict | None = None  # passed/reason/new_critical/new_high
+    estimated_readiness_score: int | None = None  # 0-100 discovery-mode estimate
