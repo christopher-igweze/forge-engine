@@ -33,6 +33,9 @@ class BaselineEntry:
     first_seen: str
     last_seen: str
     scan_count: int
+    file_path: str = ""
+    cwe_id: str = ""
+    audit_pass: str = ""
 
 
 class Baseline:
@@ -82,6 +85,9 @@ class Baseline:
                     "first_seen": entry.first_seen,
                     "last_seen": entry.last_seen,
                     "scan_count": entry.scan_count,
+                    "file_path": entry.file_path,
+                    "cwe_id": entry.cwe_id,
+                    "audit_pass": entry.audit_pass,
                 }
                 for fp, entry in self.fingerprints.items()
             },
@@ -101,6 +107,9 @@ class Baseline:
 
         comparison = BaselineComparison()
         current_fps: set[str] = set()
+
+        # Snapshot baseline entries before processing for fuzzy matching
+        pre_scan_entries = self._entries_as_dicts()
 
         for finding in current_findings:
             fp = finding.get("fingerprint", "")
@@ -126,18 +135,40 @@ class Baseline:
                 # Update severity if it changed
                 entry.severity = finding.get("severity", entry.severity)
             else:
-                # New finding
-                comparison.new_findings.append(finding)
-                self.fingerprints[fp] = BaselineEntry(
-                    finding_id=finding.get("id", ""),
-                    title=finding.get("title", ""),
-                    category=finding.get("category", ""),
-                    severity=finding.get("severity", ""),
-                    status="open",
-                    first_seen=now,
-                    last_seen=now,
-                    scan_count=1,
-                )
+                # Try fuzzy match against baseline
+                from forge.execution.fingerprint import find_match
+
+                fuzzy_fp = find_match(finding, pre_scan_entries)
+                if fuzzy_fp:
+                    # Fuzzy match found -- treat as recurring, update fingerprint
+                    entry = self.fingerprints[fuzzy_fp]
+                    if entry.status == "fixed":
+                        comparison.regressed_findings.append(finding)
+                        entry.status = "open"
+                    else:
+                        comparison.recurring_findings.append(finding)
+                    entry.last_seen = now
+                    entry.scan_count += 1
+                    entry.severity = finding.get("severity", entry.severity)
+                    # Track old fingerprint so it's not marked fixed
+                    current_fps.add(fuzzy_fp)
+                else:
+                    # Truly new finding
+                    loc = (finding.get("locations") or [{}])[0]
+                    comparison.new_findings.append(finding)
+                    self.fingerprints[fp] = BaselineEntry(
+                        finding_id=finding.get("id", ""),
+                        title=finding.get("title", ""),
+                        category=finding.get("category", ""),
+                        severity=finding.get("severity", ""),
+                        status="open",
+                        first_seen=now,
+                        last_seen=now,
+                        scan_count=1,
+                        file_path=loc.get("file_path", ""),
+                        cwe_id=finding.get("cwe_id", ""),
+                        audit_pass=finding.get("audit_pass", ""),
+                    )
 
         # Findings in baseline but not in current scan -> fixed
         for fp, entry in self.fingerprints.items():
@@ -154,6 +185,21 @@ class Baseline:
                 )
 
         return comparison
+
+    def _entries_as_dicts(self) -> dict[str, dict]:
+        """Convert baseline entries to dicts suitable for find_match()."""
+        return {
+            fp: {
+                "title": entry.title,
+                "category": entry.category,
+                "severity": entry.severity,
+                "file_path": entry.file_path,
+                "cwe_id": entry.cwe_id,
+                "audit_pass": entry.audit_pass,
+            }
+            for fp, entry in self.fingerprints.items()
+            if entry.status == "open"
+        }
 
     def suppress(self, fingerprint: str, reason: str) -> None:
         """Mark a fingerprint as suppressed."""
