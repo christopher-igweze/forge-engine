@@ -39,7 +39,19 @@ SKIP_DIRS = {
     ".artifacts", ".local-test", ".forge-worktrees", ".tox",
     "target", "vendor", ".mypy_cache", ".pytest_cache",
     "out", "bin", "obj", "benchmarks",
+    "migrations", "alembic",
 }
+
+# Patterns that reduce file relevance score for audit passes.
+# These files are unlikely to contain actionable findings.
+LOW_RELEVANCE_PATTERNS = [
+    re.compile(r"/migrations/"),
+    re.compile(r"/supabase/migrations/"),
+    re.compile(r"/alembic/"),
+    re.compile(r"\.sql$"),
+    re.compile(r"/tasks/"),
+    re.compile(r"/docs/"),
+]
 # Lock files that use non-.lock extensions (e.g. package-lock.json)
 _LOCK_FILE_NAMES = {
     "package-lock.json", "pnpm-lock.yaml", "pnpm-lock.yml",
@@ -251,6 +263,12 @@ def _score_file_for_pass(
         if any(cfg in path_lower for cfg in ["config", "env", ".env", "docker", "nginx"]):
             score += 5
 
+    # Deprioritize low-relevance files (migrations, docs, tasks, raw SQL)
+    for pattern in LOW_RELEVANCE_PATTERNS:
+        if pattern.search(file_path):
+            score -= 5
+            break
+
     return score
 
 
@@ -350,6 +368,11 @@ def select_files_for_quality_pass(
             continue
         path_lower = fe.path.lower()
         score = sum(3 for kw in keywords if kw in path_lower)
+        # Deprioritize low-relevance files
+        for pattern in LOW_RELEVANCE_PATTERNS:
+            if pattern.search(fe.path):
+                score -= 5
+                break
         scored_files.append((score, fe.path))
 
     scored_files.sort(key=lambda x: x[0], reverse=True)
