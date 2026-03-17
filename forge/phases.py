@@ -597,6 +597,29 @@ async def _run_swarm_discovery(
                 "Post-processing [swarm]: %d kept, %d suppressed, delta: %s",
                 len(kept_findings), len(suppressed_dicts), findings_delta,
             )
+
+            # --- Feedback tracking ---
+            try:
+                from forge.execution.feedback import FeedbackTracker
+
+                feedback = FeedbackTracker.load(artifacts_dir)
+                fp_rates = feedback.update_from_scan(findings_dicts, suppressed_dicts)
+                feedback.save(artifacts_dir)
+                findings_delta["fp_rates"] = fp_rates
+            except Exception as _fb_err:
+                logger.warning("Feedback tracking failed (non-fatal): %s", _fb_err)
+
+            # --- Readiness score ---
+            try:
+                from forge.execution.readiness_score import readiness_breakdown
+
+                readiness = readiness_breakdown(
+                    [f.model_dump(mode="json") for f in kept_findings]
+                )
+                findings_delta["readiness"] = readiness
+            except Exception as _rs_err:
+                logger.warning("Readiness score failed (non-fatal): %s", _rs_err)
+
         except Exception as e:
             logger.warning("Fingerprint/baseline/severity processing failed (non-fatal): %s", e)
 
