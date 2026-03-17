@@ -230,6 +230,90 @@ async def _run_discovery(
 
     emit_phase_complete(cfg, "intent_analyzer", "Intent analysis complete.")
 
+    # ── Fingerprint, Baseline, Suppression, Severity ─────────────────
+    findings_delta: dict = {}
+    suppressed_count = 0
+    if state.all_findings:
+        try:
+            from pathlib import Path as _Path
+
+            from forge.execution.baseline import Baseline
+            from forge.execution.fingerprint import fingerprint
+            from forge.execution.forgeignore import ForgeIgnore
+            from forge.execution.severity import calibrate_findings
+
+            # Convert AuditFinding models to dicts for processing
+            findings_dicts = [f.model_dump(mode="json") for f in state.all_findings]
+
+            # Generate fingerprints
+            for fd in findings_dicts:
+                fd["fingerprint"] = fingerprint(fd)
+
+            # Apply severity calibration
+            calibrate_findings(findings_dicts)
+
+            # Load .forgeignore and filter suppressed findings
+            forgeignore = ForgeIgnore.load(state.repo_path)
+            kept_dicts, suppressed_dicts = forgeignore.apply(findings_dicts)
+            suppressed_count = len(suppressed_dicts)
+
+            # Load baseline and compare
+            artifacts_dir = state.artifacts_dir or str(
+                _Path(state.repo_path) / ".artifacts"
+            )
+            baseline = Baseline.load(artifacts_dir)
+            comparison = baseline.update_from_scan(
+                state.forge_run_id, kept_dicts,
+            )
+            baseline.save(artifacts_dir)
+
+            # Build delta metadata
+            findings_delta = {
+                "new": len(comparison.new_findings),
+                "recurring": len(comparison.recurring_findings),
+                "fixed": len(comparison.fixed_findings),
+                "suppressed": suppressed_count,
+                "regressed": len(comparison.regressed_findings),
+            }
+
+            # Rebuild state.all_findings from kept (non-suppressed) dicts,
+            # applying any severity changes back to the AuditFinding objects
+            sev_map = {fd.get("fingerprint", ""): fd.get("severity") for fd in kept_dicts}
+            orig_sev_map = {fd.get("fingerprint", ""): fd.get("original_severity") for fd in kept_dicts}
+            kept_fps = {fd.get("fingerprint", "") for fd in kept_dicts}
+            suppressed_fps = {fd.get("fingerprint", "") for fd in suppressed_dicts}
+
+            # Map original findings by their fingerprint for quick lookup
+            fp_to_finding: dict[str, AuditFinding] = {}
+            for fd, finding in zip(findings_dicts, state.all_findings):
+                fp_to_finding[fd.get("fingerprint", "")] = finding
+
+            # Filter suppressed and apply calibrated severity
+            kept_findings: list[AuditFinding] = []
+            for fp_val in kept_fps:
+                finding = fp_to_finding.get(fp_val)
+                if finding:
+                    new_sev = sev_map.get(fp_val)
+                    if new_sev and new_sev != (finding.severity.value if hasattr(finding.severity, "value") else str(finding.severity)):
+                        finding.severity = new_sev
+                    kept_findings.append(finding)
+
+            state.all_findings = kept_findings
+            # Rebuild category lists from filtered findings
+            state.security_findings = [f for f in kept_findings if (f.category.value if hasattr(f.category, "value") else str(f.category)) == "security"]
+            state.quality_findings = [f for f in kept_findings if (f.category.value if hasattr(f.category, "value") else str(f.category)) == "quality"]
+            state.architecture_findings = [f for f in kept_findings if (f.category.value if hasattr(f.category, "value") else str(f.category)) == "architecture"]
+
+            if rt:
+                rt.update_findings_progress(total=len(state.all_findings))
+
+            logger.info(
+                "Post-processing: %d kept, %d suppressed, delta: %s",
+                len(kept_findings), suppressed_count, findings_delta,
+            )
+        except Exception as e:
+            logger.warning("Fingerprint/baseline/severity processing failed (non-fatal): %s", e)
+
     logger.info(
         "Discovery complete: %d security, %d quality, %d architecture findings",
         len(state.security_findings),
@@ -237,7 +321,7 @@ async def _run_discovery(
         len(state.architecture_findings),
     )
 
-    return {"invocations": invocations}
+    return {"invocations": invocations, "findings_delta": findings_delta}
 
 
 async def _run_swarm_discovery(
@@ -333,6 +417,68 @@ async def _run_swarm_discovery(
         except Exception as e:
             logger.warning("Actionability classification failed (non-fatal): %s", e)
 
+    # ── Fingerprint, Baseline, Suppression, Severity (swarm path) ───
+    findings_delta: dict = {}
+    if state.all_findings:
+        try:
+            from pathlib import Path as _Path
+
+            from forge.execution.baseline import Baseline
+            from forge.execution.fingerprint import fingerprint as _fingerprint
+            from forge.execution.forgeignore import ForgeIgnore
+            from forge.execution.severity import calibrate_findings
+
+            findings_dicts = [f.model_dump(mode="json") for f in state.all_findings]
+            for fd in findings_dicts:
+                fd["fingerprint"] = _fingerprint(fd)
+            calibrate_findings(findings_dicts)
+
+            forgeignore = ForgeIgnore.load(state.repo_path)
+            kept_dicts, suppressed_dicts = forgeignore.apply(findings_dicts)
+
+            artifacts_dir = state.artifacts_dir or str(
+                _Path(state.repo_path) / ".artifacts"
+            )
+            baseline = Baseline.load(artifacts_dir)
+            comparison = baseline.update_from_scan(state.forge_run_id, kept_dicts)
+            baseline.save(artifacts_dir)
+
+            findings_delta = {
+                "new": len(comparison.new_findings),
+                "recurring": len(comparison.recurring_findings),
+                "fixed": len(comparison.fixed_findings),
+                "suppressed": len(suppressed_dicts),
+                "regressed": len(comparison.regressed_findings),
+            }
+
+            # Apply severity changes and filter suppressed
+            sev_map = {fd.get("fingerprint", ""): fd.get("severity") for fd in kept_dicts}
+            kept_fps = {fd.get("fingerprint", "") for fd in kept_dicts}
+            fp_to_finding: dict[str, AuditFinding] = {}
+            for fd, finding in zip(findings_dicts, state.all_findings):
+                fp_to_finding[fd.get("fingerprint", "")] = finding
+
+            kept_findings: list[AuditFinding] = []
+            for fp_val in kept_fps:
+                finding = fp_to_finding.get(fp_val)
+                if finding:
+                    new_sev = sev_map.get(fp_val)
+                    if new_sev and new_sev != (finding.severity.value if hasattr(finding.severity, "value") else str(finding.severity)):
+                        finding.severity = new_sev
+                    kept_findings.append(finding)
+
+            state.all_findings = kept_findings
+            state.security_findings = [f for f in kept_findings if (f.category.value if hasattr(f.category, "value") else str(f.category)) == "security"]
+            state.quality_findings = [f for f in kept_findings if (f.category.value if hasattr(f.category, "value") else str(f.category)) == "quality"]
+            state.architecture_findings = [f for f in kept_findings if (f.category.value if hasattr(f.category, "value") else str(f.category)) == "architecture"]
+
+            logger.info(
+                "Post-processing [swarm]: %d kept, %d suppressed, delta: %s",
+                len(kept_findings), len(suppressed_dicts), findings_delta,
+            )
+        except Exception as e:
+            logger.warning("Fingerprint/baseline/severity processing failed (non-fatal): %s", e)
+
     # Parse triage result
     triage_data = hive_result.get("triage_result", {})
     if isinstance(triage_data, dict) and triage_data.get("decisions"):
@@ -352,7 +498,7 @@ async def _run_swarm_discovery(
         len(state.architecture_findings),
     )
 
-    return {"invocations": invocations}
+    return {"invocations": invocations, "findings_delta": findings_delta}
 
 
 async def _run_triage(
