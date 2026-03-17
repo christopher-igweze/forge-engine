@@ -19,6 +19,7 @@ from forge.execution.events import emit_phase_complete, emit_phase_start
 from forge.schemas import (
     AuditFinding,
     CodebaseMap,
+    FindingSeverity,
     FixOutcome,
     ForgeExecutionState,
     IntegrationValidationResult,
@@ -353,7 +354,7 @@ async def _run_discovery(
                 if finding:
                     new_sev = sev_map.get(fp_val)
                     if new_sev and new_sev != (finding.severity.value if hasattr(finding.severity, "value") else str(finding.severity)):
-                        finding.severity = new_sev
+                        finding.severity = FindingSeverity(new_sev)
                     kept_findings.append(finding)
 
             state.all_findings = kept_findings
@@ -393,7 +394,7 @@ async def _run_discovery(
                 logger.warning("Readiness score failed (non-fatal): %s", _rs_err)
 
         except Exception as e:
-            logger.warning("Fingerprint/baseline/severity processing failed (non-fatal): %s", e)
+            logger.warning("Fingerprint/baseline/severity processing failed (non-fatal): %s", e, exc_info=True)
 
     logger.info(
         "Discovery complete: %d security, %d quality, %d architecture findings",
@@ -585,7 +586,7 @@ async def _run_swarm_discovery(
                 if finding:
                     new_sev = sev_map.get(fp_val)
                     if new_sev and new_sev != (finding.severity.value if hasattr(finding.severity, "value") else str(finding.severity)):
-                        finding.severity = new_sev
+                        finding.severity = FindingSeverity(new_sev)
                     kept_findings.append(finding)
 
             state.all_findings = kept_findings
@@ -621,7 +622,7 @@ async def _run_swarm_discovery(
                 logger.warning("Readiness score failed (non-fatal): %s", _rs_err)
 
         except Exception as e:
-            logger.warning("Fingerprint/baseline/severity processing failed (non-fatal): %s", e)
+            logger.warning("Fingerprint/baseline/severity processing failed (non-fatal): %s", e, exc_info=True)
 
     # Parse triage result
     triage_data = hive_result.get("triage_result", {})
