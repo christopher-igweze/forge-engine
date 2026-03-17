@@ -60,6 +60,10 @@ forge/
     synthesizer.py     → Hive synthesis (merge worker outputs)
     orchestrator.py    → Hive orchestration (segment → dispatch → synthesize)
   execution/
+    fingerprint.py     → Stable content-based finding IDs (SHA-256, line-bucket tolerant)
+    baseline.py        → Cross-scan finding persistence (new/recurring/fixed/regressed)
+    forgeignore.py     → .forgeignore parser — user-controlled finding suppression
+    severity.py        → Post-discovery severity calibration (arch cap, OWASP boost)
     telemetry.py       → ForgeTelemetry: async-safe cost tracking via contextvars
   vendor/
     agent_ai/          → AgentAI LLM client (OpenRouter direct + opencode subprocess)
@@ -118,6 +122,23 @@ Key `ForgeConfig` fields (all have defaults):
 Environment variables:
 - `OPENROUTER_API_KEY` — Required. All LLM calls route through OpenRouter.
 - `FORGE_LIVE_TESTS=1` — Enable live E2E tests that call real APIs.
+
+## Finding Lifecycle (v2)
+
+FORGE tracks findings across scans using content-based fingerprints (SHA-256 hash of category + file + line bucket + normalized title + CWE). This enables:
+
+**Baseline comparison:** Each scan compares against the previous scan's findings. The report includes a `findings_delta` with counts for new, recurring, fixed, regressed, and suppressed findings.
+
+**`.forgeignore`:** Users can suppress finding patterns permanently by creating a `.forgeignore` YAML file in the repo root. Rules support regex on title, category filter, file path glob, severity cap, and expiry dates. Each rule requires a `reason` field.
+
+**Severity calibration:** After discovery, findings pass through `calibrate_findings()` which:
+- Caps architecture findings at MEDIUM severity
+- Boosts OWASP Top 10 CWEs to minimum HIGH
+- Downgrades findings with confidence < 0.6
+
+**File exclusions:** `context_builder.py` excludes `migrations/` and `alembic/` from `SKIP_DIRS`. Files matching `LOW_RELEVANCE_PATTERNS` (`.sql`, `tasks/`, `docs/`) get -5 relevance in audit pass scoring.
+
+**Integration point:** All v2 processing happens in `forge/phases.py` after intent analysis, before the function returns. The baseline is stored at `<repo>/.artifacts/baseline.json`.
 
 ## Related Repos
 
