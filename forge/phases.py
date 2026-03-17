@@ -63,6 +63,29 @@ async def _run_discovery(
     # ── Classic mode: sequential Agent 1 → parallel Agents 2-4 ───────
     invocations = 0
 
+    # ── Delta mode: compute changed files since last scan ────────────
+    delta_files: list[str] | None = None
+    if cfg.delta_mode:
+        try:
+            from pathlib import Path as _DeltaPath
+            from forge.execution.delta import get_changed_files, load_last_head_sha
+
+            _artifacts = state.artifacts_dir or str(
+                _DeltaPath(state.repo_path) / ".artifacts"
+            )
+            last_sha = load_last_head_sha(_artifacts)
+            delta_files = get_changed_files(state.repo_path, last_sha)
+            if delta_files is not None:
+                logger.info(
+                    "Delta mode active: %d changed files since %s",
+                    len(delta_files),
+                    last_sha[:8] if last_sha else "unknown",
+                )
+            else:
+                logger.info("Delta mode: no previous SHA found, running full scan")
+        except Exception as e:
+            logger.warning("Delta mode computation failed (falling back to full scan): %s", e)
+
     # Agent 1: Codebase Analyst (always runs first — everything depends on it)
     emit_phase_start(cfg, "discovery", "Running Agent 1 (Codebase Analyst).")
     logger.info("Discovery: Running Agent 1 (Codebase Analyst)")
@@ -232,6 +255,7 @@ async def _run_discovery(
 
     # ── Fingerprint, Baseline, Suppression, Severity ─────────────────
     findings_delta: dict = {}
+    quality_gate_result: dict = {}
     suppressed_count = 0
     if state.all_findings:
         try:
@@ -265,6 +289,16 @@ async def _run_discovery(
             comparison = baseline.update_from_scan(
                 state.forge_run_id, kept_dicts,
             )
+
+            # Track HEAD SHA for delta mode
+            try:
+                from forge.execution.delta import get_head_sha, save_head_sha
+                head_sha = get_head_sha(state.repo_path)
+                if head_sha:
+                    save_head_sha(artifacts_dir, head_sha)
+            except Exception as e:
+                logger.debug("Could not record HEAD SHA: %s", e)
+
             baseline.save(artifacts_dir)
 
             # Build delta metadata
@@ -275,6 +309,30 @@ async def _run_discovery(
                 "suppressed": suppressed_count,
                 "regressed": len(comparison.regressed_findings),
             }
+
+            # ── Quality Gate evaluation ──────────────────────────────
+            try:
+                from forge.execution.quality_gate import (
+                    QualityGateThreshold,
+                    evaluate_gate,
+                )
+                threshold = QualityGateThreshold(
+                    max_new_critical=cfg.quality_gate_max_critical,
+                    max_new_high=cfg.quality_gate_max_high,
+                    max_new_medium=cfg.quality_gate_max_medium,
+                )
+                gate_result = evaluate_gate(comparison.new_findings, threshold)
+                quality_gate_result = {
+                    "passed": gate_result.passed,
+                    "reason": gate_result.reason,
+                    "new_critical": gate_result.new_critical,
+                    "new_high": gate_result.new_high,
+                    "new_medium": gate_result.new_medium,
+                    "total_new": gate_result.total_new,
+                }
+                logger.info("Quality gate: %s", gate_result.reason)
+            except Exception as e:
+                logger.warning("Quality gate evaluation failed (non-fatal): %s", e)
 
             # Rebuild state.all_findings from kept (non-suppressed) dicts,
             # applying any severity changes back to the AuditFinding objects
@@ -311,6 +369,29 @@ async def _run_discovery(
                 "Post-processing: %d kept, %d suppressed, delta: %s",
                 len(kept_findings), suppressed_count, findings_delta,
             )
+
+            # --- Feedback tracking ---
+            try:
+                from forge.execution.feedback import FeedbackTracker
+
+                feedback = FeedbackTracker.load(artifacts_dir)
+                fp_rates = feedback.update_from_scan(findings_dicts, suppressed_dicts)
+                feedback.save(artifacts_dir)
+                findings_delta["fp_rates"] = fp_rates
+            except Exception as _fb_err:
+                logger.warning("Feedback tracking failed (non-fatal): %s", _fb_err)
+
+            # --- Readiness score ---
+            try:
+                from forge.execution.readiness_score import readiness_breakdown
+
+                readiness = readiness_breakdown(
+                    [f.model_dump(mode="json") for f in kept_findings]
+                )
+                findings_delta["readiness"] = readiness
+            except Exception as _rs_err:
+                logger.warning("Readiness score failed (non-fatal): %s", _rs_err)
+
         except Exception as e:
             logger.warning("Fingerprint/baseline/severity processing failed (non-fatal): %s", e)
 
@@ -321,7 +402,12 @@ async def _run_discovery(
         len(state.architecture_findings),
     )
 
-    return {"invocations": invocations, "findings_delta": findings_delta}
+    return {
+        "invocations": invocations,
+        "findings_delta": findings_delta,
+        "quality_gate": quality_gate_result,
+        "delta_files": delta_files,
+    }
 
 
 async def _run_swarm_discovery(
@@ -419,6 +505,7 @@ async def _run_swarm_discovery(
 
     # ── Fingerprint, Baseline, Suppression, Severity (swarm path) ───
     findings_delta: dict = {}
+    quality_gate_result: dict = {}
     if state.all_findings:
         try:
             from pathlib import Path as _Path
@@ -441,6 +528,16 @@ async def _run_swarm_discovery(
             )
             baseline = Baseline.load(artifacts_dir)
             comparison = baseline.update_from_scan(state.forge_run_id, kept_dicts)
+
+            # Track HEAD SHA for delta mode
+            try:
+                from forge.execution.delta import get_head_sha, save_head_sha
+                head_sha = get_head_sha(state.repo_path)
+                if head_sha:
+                    save_head_sha(artifacts_dir, head_sha)
+            except Exception as e:
+                logger.debug("Could not record HEAD SHA: %s", e)
+
             baseline.save(artifacts_dir)
 
             findings_delta = {
@@ -450,6 +547,30 @@ async def _run_swarm_discovery(
                 "suppressed": len(suppressed_dicts),
                 "regressed": len(comparison.regressed_findings),
             }
+
+            # ── Quality Gate evaluation ──────────────────────────────
+            try:
+                from forge.execution.quality_gate import (
+                    QualityGateThreshold,
+                    evaluate_gate,
+                )
+                threshold = QualityGateThreshold(
+                    max_new_critical=cfg.quality_gate_max_critical,
+                    max_new_high=cfg.quality_gate_max_high,
+                    max_new_medium=cfg.quality_gate_max_medium,
+                )
+                gate_result = evaluate_gate(comparison.new_findings, threshold)
+                quality_gate_result = {
+                    "passed": gate_result.passed,
+                    "reason": gate_result.reason,
+                    "new_critical": gate_result.new_critical,
+                    "new_high": gate_result.new_high,
+                    "new_medium": gate_result.new_medium,
+                    "total_new": gate_result.total_new,
+                }
+                logger.info("Quality gate: %s", gate_result.reason)
+            except Exception as e:
+                logger.warning("Quality gate evaluation failed (non-fatal): %s", e)
 
             # Apply severity changes and filter suppressed
             sev_map = {fd.get("fingerprint", ""): fd.get("severity") for fd in kept_dicts}
@@ -498,7 +619,11 @@ async def _run_swarm_discovery(
         len(state.architecture_findings),
     )
 
-    return {"invocations": invocations, "findings_delta": findings_delta}
+    return {
+        "invocations": invocations,
+        "findings_delta": findings_delta,
+        "quality_gate": quality_gate_result,
+    }
 
 
 async def _run_triage(
