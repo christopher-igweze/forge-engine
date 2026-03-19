@@ -40,6 +40,7 @@ SKIP_DIRS = {
     "target", "vendor", ".mypy_cache", ".pytest_cache",
     "out", "bin", "obj", "benchmarks",
     "migrations", "alembic",
+    "golden",  # Test fixture codebases (intentionally vulnerable)
 }
 
 # Patterns that reduce file relevance score for audit passes.

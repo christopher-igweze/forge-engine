@@ -31,3 +31,14 @@
 - pattern: "Circular import"
   path: "forge/graph/**"
   reason: "language_extractors.py imports builder._get_language inside a function — lazy import, no runtime cycle"
+
+# Golden test codebases are intentionally vulnerable — used as FORGE test fixtures
+- pattern: ".*"
+  path: "tests/golden/**"
+  reason: "Golden codebases are intentionally insecure test fixtures"
+
+# Test configuration files contain intentional test secrets
+- pattern: ".*secret.*|.*hardcoded.*|.*ASVS.*FAIL.*"
+  path: "tests/**"
+  category: security
+  reason: "Test fixtures contain intentional secrets/vulnerabilities for validation"
