@@ -1,0 +1,33 @@
+# .forgeignore — Suppression rules for FORGE self-scan
+# Each rule requires a reason field documenting why it's suppressed.
+
+# AST analysis code iterates files in loops — not actual database N+1 queries
+- pattern: "N\\+1 query"
+  reason: "AST walker code iterates source files in loops, not DB queries"
+
+# CI/CD exists in GitHub remote (private Actions workflows), not committed to repo
+- pattern: "No CI/CD"
+  reason: "GitHub Actions workflows exist in remote, not committed to source"
+
+# Complexity in reasoner/prompt modules is inherent to the domain
+- pattern: "cyclomatic complexity"
+  path: "forge/reasoners/**"
+  reason: "Discovery reasoners have complex LLM response parsing — inherent to domain"
+
+- pattern: "cyclomatic complexity"
+  path: "forge/prompts/**"
+  reason: "Prompt builders have complex string assembly — inherent to domain"
+
+# Deep nesting in pipeline orchestration is expected
+- pattern: "Deep nesting"
+  path: "forge/phases.py"
+  reason: "Pipeline orchestration has nested try/except + conditional paths"
+
+- pattern: "Deep nesting"
+  path: "forge/reasoners/**"
+  reason: "Response parsing requires nested error handling"
+
+# Circular import in graph module is a lazy import inside a function (TYPE_CHECKING-style)
+- pattern: "Circular import"
+  path: "forge/graph/**"
+  reason: "language_extractors.py imports builder._get_language inside a function — lazy import, no runtime cycle"

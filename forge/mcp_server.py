@@ -67,7 +67,7 @@ def _detect_git_remote(repo_path: str) -> str:
         if result.returncode == 0:
             return result.stdout.strip()
     except Exception:
-        pass
+        logger.debug("Failed to detect git remote for %s", repo_path)
     return ""
 
 
@@ -157,45 +157,51 @@ async def forge_scan(path: str, model: str | None = None) -> dict:
             ),
         }
 
-    from forge.standalone import run_standalone
+    try:
+        from forge.standalone import run_standalone
 
-    repo_path = _resolve_path(path)
-    start = time.monotonic()
+        repo_path = _resolve_path(path)
+        start = time.monotonic()
 
-    config: dict = {
-        "mode": "discovery",
-        "repo_path": repo_path,
-    }
-    if model:
-        config["models"] = {"default": model}
+        config: dict = {
+            "mode": "discovery",
+            "repo_path": repo_path,
+        }
+        if model:
+            config["models"] = {"default": model}
 
-    result = await run_standalone(repo_path=repo_path, config=config)
-    report = result.model_dump(mode="json")
-    duration = time.monotonic() - start
+        result = await run_standalone(repo_path=repo_path, config=config)
+        report = result.model_dump(mode="json")
+        duration = time.monotonic() - start
 
-    effective_model = model or "minimax/minimax-m2.5"
-    cost = report.get("cost_usd", 0)
+        effective_model = model or "minimax/minimax-m2.5"
+        cost = report.get("cost_usd", 0)
 
-    # Send anonymous telemetry (fire-and-forget)
-    await _send_telemetry("scan_complete", {
-        "version": "1.0.0",
-        "model": effective_model,
-        "mode": "cli_discovery",
-        "findings_count": report.get("total_findings", 0),
-        "duration_seconds": round(duration, 2),
-        "cost_usd": cost,
-    })
+        # Send anonymous telemetry (fire-and-forget)
+        await _send_telemetry("scan_complete", {
+            "version": "1.0.0",
+            "model": effective_model,
+            "mode": "cli_discovery",
+            "findings_count": report.get("total_findings", 0),
+            "duration_seconds": round(duration, 2),
+            "cost_usd": cost,
+        })
 
-    # Sync full report to dashboard (if API key is set)
-    await _sync_scan_to_dashboard(
-        repo_path=repo_path,
-        discovery_report=report.get("discovery_report", report),
-        cost_usd=cost,
-        duration_seconds=round(duration, 2),
-        model=effective_model,
-    )
+        # Sync full report to dashboard (if API key is set)
+        await _sync_scan_to_dashboard(
+            repo_path=repo_path,
+            discovery_report=report.get("discovery_report", report),
+            cost_usd=cost,
+            duration_seconds=round(duration, 2),
+            model=effective_model,
+        )
 
-    return report
+        return report
+    except ValueError as e:
+        return {"error": "invalid_path", "message": str(e)}
+    except Exception:
+        logger.exception("forge_scan failed for path=%s", path)
+        return {"error": "scan_failed", "message": "An internal error occurred during the scan."}
 
 
 @mcp.tool()
@@ -208,13 +214,28 @@ def forge_status(path: str) -> dict:
     Args:
         path: Path to the repository being scanned.
     """
-    status_file = Path(path) / ".artifacts" / "telemetry" / "live_status.json"
-    if not status_file.exists():
-        return {"status": "no_active_run"}
     try:
+        status_file = Path(path) / ".artifacts" / "telemetry" / "live_status.json"
+        if not status_file.exists():
+            return {"status": "no_active_run"}
         return json.loads(status_file.read_text())
     except (json.JSONDecodeError, OSError):
         return {"status": "error"}
+    except Exception:
+        logger.exception("forge_status failed for path=%s", path)
+        return {"status": "error", "message": "An internal error occurred."}
+
+
+@mcp.tool()
+def forge_health() -> dict:
+    """Health check for the FORGE MCP server.
+
+    Returns server status and whether the required API key is configured.
+    """
+    return {
+        "status": "ok",
+        "api_key_set": bool(os.environ.get("OPENROUTER_API_KEY")),
+    }
 
 
 def main() -> None:
