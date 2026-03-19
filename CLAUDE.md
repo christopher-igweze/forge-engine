@@ -4,21 +4,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-FORGE (Framework for Orchestrated Remediation & Governance Engine) is a 12-agent AI system that takes vibe-coded MVPs and hardens them for production. It operates in 4 phases:
+FORGE (Framework for Orchestrated Remediation & Governance Engine) is an AI-powered codebase auditing engine. It scans codebases for security, quality, and architecture issues using a combination of deterministic analysis (Opengrep) and LLM-based review, then produces a scored evaluation report.
 
-1. **Discovery** (Agents 1-4) — Codebase analyst, security auditor, quality auditor, architecture reviewer
-2. **Triage** (Agents 5-6) — Triage classifier (tier 0-3), fix strategist (priority + ordering)
-3. **Remediation** (Agents 7-10) — Tier 2/3 coders, test generator, code reviewer
-4. **Validation** (Agents 11-12) — Integration validator, debt tracker (readiness report)
+The v3 architecture uses 3 active LLM agents and ~5 LLM calls per scan:
 
-Three control loops govern remediation: inner (coder retry, max 3), middle (escalation: reclassify/defer), outer (replan via fix strategist, max 1).
+1. **Codebase Analyst** — builds a structured map of the codebase (modules, dependencies, data flows)
+2. **Security Auditor** — parallel audit passes (auth flow, data handling, infrastructure)
+3. **Fix Strategist** — prioritizes findings and produces a remediation plan
+
+Post-discovery, deterministic systems handle evaluation:
+- **Opengrep** — SAST scanner with custom FORGE rules + community rules
+- **Evaluation Framework** — deterministic scoring across 5 dimensions
+- **AIVSS** — AI-specific vulnerability scoring (like CVSS but for AI-era risks)
+- **Quality Gate** — pass/fail gate based on configurable severity thresholds
+- **Compliance Mapping** — ASVS, STRIDE, NIST SSDF compliance checks
 
 ## Commands
 
 ```bash
 # Install for development
-pip install -e ".[dev]"            # standalone mode
-pip install -e ".[platform,dev]"   # with AgentField support
+pip install -e ".[dev]"
 
 # Run all tests (unit + integration + golden)
 pytest
@@ -29,77 +34,83 @@ pytest -m "not live"               # skip live API tests
 FORGE_LIVE_TESTS=1 pytest -m live  # run live E2E (requires OPENROUTER_API_KEY)
 
 # CLI commands
-vibe2prod scan ./my-app            # discovery only (agents 1-6)
-vibe2prod fix ./my-app             # full pipeline (all 12 agents)
+vibe2prod scan ./my-app            # discovery + evaluation
+vibe2prod fix ./my-app             # full pipeline
 vibe2prod report ./my-app          # view last run's report
+vibe2prod status ./my-app          # check running scan progress
+vibe2prod config set key value     # set config value
 
-# Start as AgentField node (platform mode)
-python -m forge
+# MCP server (for AI IDE integration)
+# Registered via .mcp.json — provides forge_scan and forge_status tools
 ```
 
 ## Architecture
 
 ```
 forge/
-  __main__.py          → AgentField node entry point
-  app.py               → AgentField app, registers reasoners (remediate, discover, scan)
-  app_helpers.py       → Shared pipeline helpers
-  standalone.py        → run_standalone() — primary SDK entry point for CLI/tests
-  cli.py               → Typer CLI: vibe2prod scan/fix/report
+  __main__.py          → CLI entry point
+  cli.py               → Typer CLI: vibe2prod scan/fix/report/status/config
   config.py            → ForgeConfig (Pydantic, extra="forbid"), model routing, provider mapping
   schemas.py           → Pydantic models: ForgeMode, Finding, RemediationPlan, ForgeResult, etc.
-  phases.py            → Phase orchestration: discovery, triage, remediation, validation
+  standalone.py        → run_standalone() — primary SDK entry point for CLI/tests
+  phases.py            → Phase orchestration: discovery pipeline
+  mcp_server.py        → MCP server for AI IDE integration (forge_scan, forge_status)
   reasoners/
-    discovery.py       → Classic discovery (agents 1-4, parallel audit)
-    hive_discovery.py  → Swarm-based discovery (Layer 0 graph → Layer 1 workers → Layer 2 synthesis)
-    triage.py          → Triage classifier + fix strategist
-    remediation.py     → Coder dispatch, inner/middle/outer loops, worktree isolation
-    validation.py      → Integration validator + debt tracker
-  swarm/
-    worker.py          → Hive swarm workers (per-segment analysis)
-    synthesizer.py     → Hive synthesis (merge worker outputs)
-    orchestrator.py    → Hive orchestration (segment → dispatch → synthesize)
+    discovery.py       → Codebase analyst + security/quality/architecture audit
+    triage.py          → Fix strategist (priority + ordering)
+  evaluation/
+    dimensions.py      → 5-dimension scoring (security, quality, architecture, reliability, performance)
+    checks/            → Deterministic check implementations per dimension
+    quality_gate.py    → Pass/fail gate with configurable profiles
+    compliance.py      → ASVS/STRIDE/NIST SSDF compliance mapping
+    aivss.py           → AI Vulnerability Severity Score calculator
+    aivss_detector.py  → Detects AI/ML-specific vulnerability patterns
+    feedback.py        → Actionable fix suggestions per finding
+    report.py          → Evaluation report generation
   execution/
     fingerprint.py     → Stable content-based finding IDs (SHA-256, line-bucket tolerant)
     baseline.py        → Cross-scan finding persistence (new/recurring/fixed/regressed)
     forgeignore.py     → .forgeignore parser — user-controlled finding suppression
     severity.py        → Post-discovery severity calibration (arch cap, OWASP boost)
     telemetry.py       → ForgeTelemetry: async-safe cost tracking via contextvars
+    run_telemetry.py   → RunTelemetry: real-time observable state + circuit breakers
+    context_builder.py → File inventory and codebase context preparation
+    report.py          → Discovery report generation (HTML/JSON)
+    actionability.py   → Finding actionability classification
+    intent_analyzer.py → Deterministic intent detection (suppressions, test files)
+    opengrep_runner.py → Opengrep SAST integration
+  rules/               → FORGE custom Opengrep YAML rules
   vendor/
-    agent_ai/          → AgentAI LLM client (OpenRouter direct + opencode subprocess)
+    agent_ai/          → AgentAI LLM client (OpenRouter direct)
   graph/               → Code graph analysis (tree-sitter AST, community detection)
-  learning/            → Training data collection for fine-tuning flywheel
   compliance/          → NIST SSDF compliance mapping
   conventions/         → Convention detection and enforcement
   patterns/            → Vulnerability pattern library (YAML-based)
   prompts/             → Agent prompt templates
 tests/
-  unit/                → ~470+ unit tests
-  integration/         → ~40+ integration tests (mocked LLM), live E2E tests
-  golden/              → ~18 golden snapshot tests
+  unit/                → Unit tests
+  integration/         → Integration tests (mocked LLM), live E2E tests
+  golden/              → Golden snapshot tests against known-flawed codebases
   fixtures/            → Shared test fixtures
-doc/                   → Design specs (hive discovery, hybrid remediation, etc.)
 ```
 
 ## Key Patterns
 
-**Standalone mode** is the primary entry point for CLI and tests. `run_standalone(repo_path, config)` in `forge/standalone.py` runs the full pipeline without AgentField. All live E2E tests use this path.
+**Standalone mode** is the primary entry point for CLI and tests. `run_standalone(repo_path, config)` in `forge/standalone.py` runs the full pipeline. All live E2E tests use this path.
 
-**Agent pipeline:** Each phase returns structured Pydantic models. Discovery produces findings, triage classifies them into tiers (0-3) and creates a remediation plan, remediation applies fixes in isolated git worktrees, validation scores the result.
+**Pipeline flow:** Opengrep SAST scan -> Codebase Analyst -> Security Auditor (parallel passes) -> Fix Strategist -> Deterministic Evaluation + AIVSS scoring -> Quality Gate -> Report.
 
-**Model routing:** `ForgeConfig.model_for_role(role)` resolves via cascade: `FORGE_DEFAULT_MODELS` < `models.default` < `models.<role>`. Cheap agents (codebase analyst, quality auditor) use MiniMax M2.5. Mid-tier agents (security, triage, review) use Haiku 4.5. Coders use Sonnet 4.6. Fallback escalates to Kimi K2.5.
+**Model routing:** `ForgeConfig.model_for_role(role)` resolves via cascade: `FORGE_DEFAULT_MODELS` < `models.default` < `models.<role>`. Analysis agents (codebase analyst, quality auditor) use MiniMax M2.5. Reasoning agents (security auditor, architecture reviewer, fix strategist) use Haiku 4.5.
 
-**Provider routing:** `ROLE_TO_PROVIDER` maps each role to `openrouter_direct` (text-in/JSON-out), `opencode` (subprocess with file tools), or `openrouter_tools` (native function calling). Analysis agents use direct, coders use opencode, fallback uses tools.
+**Provider routing:** All discovery agents use `openrouter_direct` (text-in/JSON-out, no tools).
 
 **Telemetry:** `ForgeTelemetry` uses `contextvars.ContextVar` for async-safe singleton. `AgentAI.run()` auto-logs every LLM call. Cost summaries written to `<repo>/.artifacts/telemetry/`.
 
 **Config is strict:** `ForgeConfig` uses `extra="forbid"`. Unknown fields crash validation. When adding config fields, add them to `ForgeConfig` in `forge/config.py`.
 
-**Tier routing:** Tier 0 = auto-skip (noise). Tier 1 = deterministic fix (no LLM). Tier 2 = scoped AI fix (1-3 files, Sonnet). Tier 3 = architectural fix (5-15 files, Sonnet).
+**Evaluation scoring:** Deterministic scoring across 5 dimensions (security, quality, architecture, reliability, performance). Each dimension runs checks against findings. Quality gate profiles ("forge-way", "strict", "startup") control pass/fail thresholds.
 
-**Worktree isolation:** Each Tier 2/3 fix runs in its own git worktree under `<repo>/.forge-worktrees/`. Merged back on success, cleaned up after run.
-
-**Convergence loop:** After remediation, FORGE can re-scan and re-fix until `convergence_target_score` (default 95) is reached or `max_convergence_iterations` (default 3) is exhausted.
+**Finding lifecycle:** Content-based fingerprints (SHA-256) enable cross-scan tracking. Baseline comparison produces delta (new/recurring/fixed/regressed/suppressed). `.forgeignore` YAML allows user-controlled suppression. Severity calibration adjusts confidence-weighted scores post-discovery.
 
 ## Configuration
 
@@ -107,23 +118,23 @@ Key `ForgeConfig` fields (all have defaults):
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `mode` | `full` | Pipeline mode: full, discovery, remediation, validation |
+| `mode` | `full` | Pipeline mode: full, discovery |
 | `models` | `null` | Per-role model overrides dict |
-| `discovery_mode` | `classic` | Discovery architecture: classic or swarm (hive) |
-| `max_inner_retries` | `3` | Coder retry attempts |
-| `max_middle_escalations` | `2` | Escalation attempts before defer |
-| `max_outer_replans` | `1` | Fix strategist replans |
 | `agent_timeout_seconds` | `900` | Per-agent timeout (15 min) |
 | `dry_run` | `false` | Scan only, no fixes applied |
-| `convergence_enabled` | `true` | Re-scan after fixes for score improvement |
-| `convergence_target_score` | `95` | Stop when score reaches this |
+| `enable_parallel_audit` | `true` | Run audit passes concurrently |
+| `opengrep_enabled` | `true` | Use Opengrep for deterministic scanning |
+| `quality_gate_profile` | `forge-way` | Quality gate profile |
+| `evaluation_weights` | `null` | Dimension weight overrides |
+| `delta_mode` | `false` | Only scan changed files |
 | `webhook_url` | `""` | POST endpoint for scan progress events |
+| `max_cost_usd` | `0.0` | Cost budget (0 = no limit) |
 
 Environment variables:
 - `OPENROUTER_API_KEY` — Required. All LLM calls route through OpenRouter.
 - `FORGE_LIVE_TESTS=1` — Enable live E2E tests that call real APIs.
 
-## Finding Lifecycle (v2)
+## Finding Lifecycle
 
 FORGE tracks findings across scans using content-based fingerprints (SHA-256 hash of category + file + line bucket + normalized title + CWE). This enables:
 
@@ -138,7 +149,7 @@ FORGE tracks findings across scans using content-based fingerprints (SHA-256 has
 
 **File exclusions:** `context_builder.py` excludes `migrations/` and `alembic/` from `SKIP_DIRS`. Files matching `LOW_RELEVANCE_PATTERNS` (`.sql`, `tasks/`, `docs/`) get -5 relevance in audit pass scoring.
 
-**Integration point:** All v2 processing happens in `forge/phases.py` after intent analysis, before the function returns. The baseline is stored at `<repo>/.artifacts/baseline.json`.
+**Integration point:** All finding lifecycle processing happens in `forge/phases.py` after intent analysis. The baseline is stored at `<repo>/.artifacts/baseline.json`.
 
 ## Related Repos
 

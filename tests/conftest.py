@@ -240,7 +240,7 @@ def make_mock_app_call(*responses):
 @pytest.fixture
 def forge_config():
     """Default ForgeConfig for tests."""
-    return ForgeConfig(max_inner_retries=3, max_middle_escalations=2, max_outer_replans=1)
+    return ForgeConfig()
 
 
 @pytest.fixture

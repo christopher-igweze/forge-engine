@@ -1,7 +1,7 @@
 """3x3 Matrix E2E tests: Size (small/medium/large) × Complexity (simple/decent/complex).
 
 Clones real open-source repos from GitHub and runs FORGE discovery against them.
-Tests are discovery-only (dry_run=True) to keep costs manageable while still
+Tests are discovery-only to keep costs manageable while still
 exercising the full pipeline (Agents 1-6: analyst + 3 auditors + classifier + strategist).
 
 Matrix:
@@ -182,9 +182,6 @@ def _make_discovery_config(overrides: dict | None = None) -> dict:
     cfg: dict = {
         "runtime": "open_code",
         "mode": "discovery",
-        "dry_run": True,
-        "enable_learning": False,
-        "enable_github_pr": False,
         "enable_parallel_audit": True,
     }
     if overrides:

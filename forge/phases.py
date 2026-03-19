@@ -1,29 +1,24 @@
 """FORGE pipeline phase orchestrators.
 
 Each function accepts a duck-typed *dispatcher* (anything with a ``.call()``
-method) so it works with both the AgentField ``app`` and the standalone
-``StandaloneDispatcher``.
-
-Extracted from ``forge/app.py`` for clarity.  All names are re-exported
-from ``forge.app`` so existing ``from forge.app import ...`` still works.
+method) so it works with the standalone ``StandaloneDispatcher``.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import TYPE_CHECKING
 
-from forge.app_helpers import NODE_ID, _filter_execution_levels, _unwrap_to_model
 from forge.execution.events import emit_phase_complete, emit_phase_start
+from forge.execution.json_utils import safe_parse_agent_response
 from forge.schemas import (
     AuditFinding,
     CodebaseMap,
     FindingSeverity,
     FixOutcome,
     ForgeExecutionState,
-    IntegrationValidationResult,
-    ProductionReadinessReport,
     RemediationPlan,
     TriageResult,
 )
@@ -32,6 +27,60 @@ if TYPE_CHECKING:
     from forge.config import ForgeConfig
 
 logger = logging.getLogger(__name__)
+
+# ── Utilities (moved from app_helpers.py) ────────────────────────────
+
+NODE_ID = os.getenv("FORGE_NODE_ID", "forge-engine")
+
+
+def _filter_execution_levels(
+    levels: list[list[str]],
+    keep_ids: set[str],
+) -> list[list[str]]:
+    """Filter execution levels to only include specified finding IDs."""
+    filtered = []
+    for level in levels:
+        kept = [fid for fid in level if fid in keep_ids]
+        if kept:
+            filtered.append(kept)
+    return filtered
+
+
+def _unwrap_to_model(result):
+    """Handle AgentField envelope unwrapping with resilient JSON parsing."""
+    return safe_parse_agent_response(result, fallback=result)
+
+
+def _build_summary(state: ForgeExecutionState) -> str:
+    """Build a human-readable summary of the FORGE run."""
+    parts = [f"FORGE run {state.forge_run_id}"]
+
+    if state.all_findings:
+        parts.append(f"Found {len(state.all_findings)} issues")
+        by_sev = {}
+        for f in state.all_findings:
+            by_sev[f.severity.value] = by_sev.get(f.severity.value, 0) + 1
+        sev_str = ", ".join(f"{v} {k}" for k, v in sorted(by_sev.items()))
+        parts.append(f"({sev_str})")
+
+    if state.remediation_plan:
+        parts.append(
+            f"Remediation plan: {state.remediation_plan.total_items} items "
+            f"across {len(state.remediation_plan.execution_levels)} levels"
+        )
+
+    if state.completed_fixes:
+        actually_fixed = [
+            f for f in state.completed_fixes
+            if f.outcome in (FixOutcome.COMPLETED, FixOutcome.COMPLETED_WITH_DEBT)
+        ]
+        if actually_fixed:
+            parts.append(f"Fixed: {len(actually_fixed)}")
+
+    if state.outer_loop.deferred_findings:
+        parts.append(f"Deferred: {len(state.outer_loop.deferred_findings)}")
+
+    return ". ".join(parts) + "."
 
 
 def _get_run_telemetry():
@@ -52,16 +101,12 @@ async def _run_discovery(
     cfg: ForgeConfig,
     resolved_models: dict[str, str],
 ) -> dict:
-    """Run Discovery phase: Agents 1-4 (classic) or Hive Discovery (swarm)."""
+    """Run Discovery phase: Agents 1-2 (codebase analyst + security auditor)."""
     rt = _get_run_telemetry()
     if rt:
         rt.set_phase("discovery")
 
-    # ── Swarm mode: delegate to Hive Discovery ───────────────────────
-    if cfg.discovery_mode == "swarm":
-        return await _run_swarm_discovery(app, state, cfg, resolved_models)
-
-    # ── Classic mode: sequential Agent 1 → parallel Agents 2-4 ───────
+    # ── Classic mode: sequential Agent 1 → Agent 2 ───────────────────
     invocations = 0
 
     # ── Delta mode: compute changed files since last scan ────────────
@@ -87,6 +132,41 @@ async def _run_discovery(
         except Exception as e:
             logger.warning("Delta mode computation failed (falling back to full scan): %s", e)
 
+    # ── Opengrep Deterministic Scan ────────────────────────────────────
+    opengrep_findings: list[dict] = []
+    if cfg.opengrep_enabled:
+        try:
+            from forge.execution.opengrep_runner import (
+                OpengrepRunner,
+                opengrep_available,
+                to_audit_finding,
+            )
+
+            if opengrep_available():
+                rules_dir = cfg.opengrep_rules_dir or None  # None = use built-in
+                runner = OpengrepRunner(
+                    rules_dirs=[rules_dir] if rules_dir else None,
+                    use_community_rules=cfg.opengrep_community_rules,
+                    timeout=cfg.opengrep_timeout,
+                )
+                raw_og_findings = runner.scan(state.repo_path)
+
+                # Convert to AuditFinding-compatible dicts and tag as deterministic
+                for og in raw_og_findings:
+                    af_dict = to_audit_finding(og)
+                    af_dict["source"] = "deterministic"
+                    af_dict["agent"] = "opengrep"
+                    opengrep_findings.append(af_dict)
+
+                logger.info(
+                    "Opengrep found %d deterministic findings",
+                    len(opengrep_findings),
+                )
+            else:
+                logger.info("Opengrep not installed — skipping deterministic scan")
+        except Exception as e:
+            logger.warning("Opengrep scan failed (non-fatal): %s", e)
+
     # Agent 1: Codebase Analyst (always runs first — everything depends on it)
     emit_phase_start(cfg, "discovery", "Running Agent 1 (Codebase Analyst).")
     logger.info("Discovery: Running Agent 1 (Codebase Analyst)")
@@ -109,11 +189,10 @@ async def _run_discovery(
     invocations += 1
     emit_phase_complete(cfg, "codebase_analyst", "Agent 1 (Codebase Analyst) complete.")
 
-    # Agents 2, 3, 4: Run in parallel (all depend only on CodebaseMap)
-    emit_phase_start(cfg, "discovery", "Running Agents 2-4 in parallel (Security, Quality, Architecture).")
-    logger.info("Discovery: Running Agents 2-4 in parallel")
+    # Agent 2: Security Auditor (only LLM auditor in v3 — quality + architecture covered by deterministic checks)
+    emit_phase_start(cfg, "discovery", "Running Agent 2 (Security Auditor).")
+    logger.info("Discovery: Running Agent 2 (Security Auditor)")
 
-    coros = []
     # Build project context string for prompt injection (zero LLM cost)
     project_context_str = ""
     if cfg.project_context:
@@ -144,8 +223,7 @@ async def _run_discovery(
     except Exception as e:
         logger.warning("Convention extraction failed (non-fatal): %s", e)
 
-    # Agent 2: Security Auditor
-    coros.append(app.call(
+    security_result = await app.call(
         f"{NODE_ID}.run_security_auditor",
         repo_path=state.repo_path,
         codebase_map=codebase_map_dict if isinstance(codebase_map_dict, dict)
@@ -156,55 +234,18 @@ async def _run_discovery(
         parallel=cfg.enable_parallel_audit,
         pattern_library_path=cfg.pattern_library_path,
         project_context=project_context_str,
-    ))
+    )
+    invocations += 1  # Security auditor only
 
-    # Agent 3: Quality Auditor
-    coros.append(app.call(
-        f"{NODE_ID}.run_quality_auditor",
-        repo_path=state.repo_path,
-        codebase_map=codebase_map_dict if isinstance(codebase_map_dict, dict)
-        else codebase_map_dict,
-        artifacts_dir=state.artifacts_dir,
-        model=resolved_models.get("quality_auditor_model", "minimax/minimax-m2.5"),
-        ai_provider=cfg.provider_for_role("quality_auditor"),
-        project_context=project_context_str,
-    ))
-
-    # Agent 4: Architecture Reviewer
-    coros.append(app.call(
-        f"{NODE_ID}.run_architecture_reviewer",
-        repo_path=state.repo_path,
-        codebase_map=codebase_map_dict if isinstance(codebase_map_dict, dict)
-        else codebase_map_dict,
-        artifacts_dir=state.artifacts_dir,
-        model=resolved_models.get("architecture_reviewer_model", "anthropic/claude-haiku-4.5"),
-        ai_provider=cfg.provider_for_role("architecture_reviewer"),
-        project_context=project_context_str,
-    ))
-
-    results = await asyncio.gather(*coros, return_exceptions=True)
-    invocations += 3  # 3 agents called (security has 3 sub-passes but is 1 agent)
-
-    # Parse results
-    for i, r in enumerate(results):
-        if isinstance(r, Exception):
-            logger.error("Discovery agent %d failed: %s", i + 2, r)
-            continue
-
-        result_dict = r if isinstance(r, dict) else {}
-
-        if i == 0:  # Security
-            state.security_findings = [
-                AuditFinding(**f) for f in result_dict.get("findings", [])
-            ]
-        elif i == 1:  # Quality
-            state.quality_findings = [
-                AuditFinding(**f) for f in result_dict.get("findings", [])
-            ]
-        elif i == 2:  # Architecture
-            state.architecture_findings = [
-                AuditFinding(**f) for f in result_dict.get("findings", [])
-            ]
+    # Parse security results
+    result_dict = security_result if isinstance(security_result, dict) else {}
+    state.security_findings = [
+        AuditFinding(**f) for f in result_dict.get("findings", [])
+    ]
+    # DEPRECATED: Quality auditor and architecture reviewer removed in v3
+    # Covered by deterministic checks in forge/evaluation/checks/
+    state.quality_findings = []
+    state.architecture_findings = []
 
     # Merge all findings
     state.all_findings = (
@@ -212,37 +253,74 @@ async def _run_discovery(
         state.quality_findings +
         state.architecture_findings
     )
+
+    # Merge Opengrep deterministic findings with LLM findings
+    if opengrep_findings:
+        from forge.schemas import FindingCategory, FindingLocation
+        for og_dict in opengrep_findings:
+            try:
+                cat_map = {
+                    "security": FindingCategory.SECURITY,
+                    "quality": FindingCategory.QUALITY,
+                    "performance": FindingCategory.PERFORMANCE,
+                    "reliability": FindingCategory.RELIABILITY,
+                    "architecture": FindingCategory.ARCHITECTURE,
+                }
+                cat = cat_map.get(
+                    og_dict.get("category", "security"), FindingCategory.SECURITY
+                )
+                sev_map = {
+                    "critical": FindingSeverity.CRITICAL,
+                    "high": FindingSeverity.HIGH,
+                    "medium": FindingSeverity.MEDIUM,
+                    "low": FindingSeverity.LOW,
+                    "info": FindingSeverity.INFO,
+                }
+                sev = sev_map.get(
+                    og_dict.get("severity", "medium"), FindingSeverity.MEDIUM
+                )
+
+                locs = []
+                for loc in og_dict.get("locations", []):
+                    locs.append(FindingLocation(
+                        file_path=loc.get("file_path", ""),
+                        line_start=loc.get("line_start"),
+                        line_end=loc.get("line_end"),
+                        snippet=loc.get("snippet", ""),
+                    ))
+
+                af = AuditFinding(
+                    title=og_dict.get("title", ""),
+                    description=og_dict.get("description", ""),
+                    category=cat,
+                    severity=sev,
+                    locations=locs,
+                    confidence=og_dict.get("confidence", 0.9),
+                    cwe_id=og_dict.get("cwe_id", ""),
+                    owasp_ref=og_dict.get("owasp_ref", ""),
+                    agent="opengrep",
+                    data_flow=og_dict.get("data_flow", ""),
+                    suggested_fix=og_dict.get("suggested_fix", ""),
+                    intent_signal="unintentional",
+                )
+                state.all_findings.append(af)
+            except Exception as e:
+                logger.warning("Failed to convert Opengrep finding: %s", e)
+
+        logger.info(
+            "Merged %d Opengrep findings into %d total findings",
+            len(opengrep_findings),
+            len(state.all_findings),
+        )
     if rt:
         rt.update_findings_progress(total=len(state.all_findings))
     emit_phase_complete(
         cfg, "discovery",
-        f"Agents 2-4 complete. {len(state.all_findings)} total findings.",
+        f"Agent 2 complete. {len(state.all_findings)} total findings.",
     )
 
-    # Intent analysis (LLM-based reasoning about developer intent)
-    if state.all_findings:
-        try:
-            from forge.execution.intent_analyzer import analyze_intent
-            _conventions = conventions if "conventions" in dir() else None
-            intent_result = await analyze_intent(
-                findings=state.all_findings,
-                repo_path=state.repo_path,
-                conventions=_conventions,
-                model=cfg.model_for_role("intent_analyzer"),
-                ai_provider=cfg.provider_for_role("intent_analyzer"),
-            )
-            if intent_result.decisions:
-                invocations += 1
-                logger.info(
-                    "Intent analysis: %d intentional, %d ambiguous, %d unintentional "
-                    "(%d deterministic)",
-                    intent_result.intentional_count,
-                    intent_result.ambiguous_count,
-                    intent_result.unintentional_count,
-                    intent_result.deterministic_count,
-                )
-        except Exception as e:
-            logger.warning("Intent analysis failed (non-fatal): %s", e)
+    # DEPRECATED: Intent analysis removed in v3
+    # Covered by .forgeignore rules + <intent_detection> block in security auditor prompt
 
     # Apply actionability classification (deterministic post-processing)
     if state.all_findings:
@@ -252,7 +330,7 @@ async def _run_discovery(
         except Exception as e:
             logger.warning("Actionability classification failed (non-fatal): %s", e)
 
-    emit_phase_complete(cfg, "intent_analyzer", "Intent analysis complete.")
+    emit_phase_complete(cfg, "actionability", "Actionability classification complete.")
 
     # ── Fingerprint, Baseline, Suppression, Severity ─────────────────
     findings_delta: dict = {}
@@ -396,6 +474,41 @@ async def _run_discovery(
         except Exception as e:
             logger.warning("Fingerprint/baseline/severity processing failed (non-fatal): %s", e, exc_info=True)
 
+    # ── v3 Deterministic Evaluation ────────────────────────────────────
+    evaluation_result = None
+    try:
+        from forge.evaluation import run_evaluation
+        eval_weights = cfg.evaluation_weights
+        gate_profile = cfg.quality_gate_profile
+
+        # Build baseline comparison dict for quality gate (from existing v2 data)
+        baseline_comp = None
+        if findings_delta:
+            baseline_comp = {
+                "new_critical": sum(
+                    1 for f in state.all_findings
+                    if getattr(f, "severity", None) == FindingSeverity.CRITICAL
+                ) if findings_delta.get("new", 0) > 0 else 0,
+                "new_high": sum(
+                    1 for f in state.all_findings
+                    if getattr(f, "severity", None) == FindingSeverity.HIGH
+                ) if findings_delta.get("new", 0) > 0 else 0,
+                "new_medium": sum(
+                    1 for f in state.all_findings
+                    if getattr(f, "severity", None) == FindingSeverity.MEDIUM
+                ) if findings_delta.get("new", 0) > 0 else 0,
+            }
+
+        evaluation_result = run_evaluation(
+            state.repo_path,
+            gate_profile=gate_profile,
+            weights=eval_weights,
+            baseline_comparison=baseline_comp,
+            opengrep_findings=opengrep_findings if opengrep_findings else None,
+        )
+    except Exception as e:
+        logger.warning("v3 evaluation failed (non-fatal): %s", e)
+
     logger.info(
         "Discovery complete: %d security, %d quality, %d architecture findings",
         len(state.security_findings),
@@ -408,245 +521,7 @@ async def _run_discovery(
         "findings_delta": findings_delta,
         "quality_gate": quality_gate_result,
         "delta_files": delta_files,
-    }
-
-
-async def _run_swarm_discovery(
-    app,
-    state: ForgeExecutionState,
-    cfg: ForgeConfig,
-    resolved_models: dict[str, str],
-) -> dict:
-    """Run Discovery via Hive Discovery (swarm mode).
-
-    Replaces Agents 1-6 with Layer 0 (deterministic graph) + Layer 1
-    (parallel swarm workers) + Layer 2 (sonnet synthesis).
-    """
-    logger.info("Discovery [swarm]: Running Hive Discovery pipeline")
-
-    hive_result = await app.call(
-        f"{NODE_ID}.run_hive_discovery",
-        repo_path=state.repo_path,
-        repo_url=state.repo_url,
-        artifacts_dir=state.artifacts_dir,
-        worker_model=resolved_models.get("swarm_worker_model", "minimax/minimax-m2.5"),
-        synthesis_model=resolved_models.get("synthesizer_model", "anthropic/claude-sonnet-4.6"),
-        ai_provider=cfg.provider_for_role("swarm_worker"),
-        target_segments=cfg.swarm_target_segments,
-        enable_wave2=cfg.swarm_enable_wave2,
-        worker_types=cfg.swarm_worker_types,
-        pattern_library_path=cfg.pattern_library_path,
-        project_context=cfg.project_context,
-    )
-
-    if not isinstance(hive_result, dict):
-        hive_result = {}
-
-    # Map hive result into ForgeExecutionState
-    cm_data = hive_result.get("codebase_map", {})
-    if isinstance(cm_data, dict):
-        # Ensure required fields exist
-        cm_data.setdefault("files", [])
-        cm_data.setdefault("loc_total", 0)
-        cm_data.setdefault("file_count", 0)
-        cm_data.setdefault("primary_language", "")
-        cm_data.setdefault("languages", [])
-        state.codebase_map = CodebaseMap(**cm_data)
-
-    # Parse findings
-    from forge.reasoners.discovery import _normalize_finding
-    findings_data = hive_result.get("findings", [])
-    all_findings = []
-    for f_data in findings_data:
-        if isinstance(f_data, dict):
-            f_data.setdefault("category", "quality")
-            f_data.setdefault("severity", "medium")
-            f_data.setdefault("title", "Untitled finding")
-            f_data.setdefault("description", "")
-            _normalize_finding(f_data)
-            try:
-                all_findings.append(AuditFinding(**f_data))
-            except Exception as e:
-                logger.warning("Failed to parse hive finding: %s", e)
-
-    # Categorize findings
-    state.security_findings = [f for f in all_findings if f.category.value == "security"]
-    state.quality_findings = [f for f in all_findings if f.category.value == "quality"]
-    state.architecture_findings = [f for f in all_findings if f.category.value == "architecture"]
-    state.all_findings = all_findings
-
-    # Intent analysis (LLM-based reasoning about developer intent)
-    if state.all_findings:
-        try:
-            from forge.execution.intent_analyzer import analyze_intent
-            intent_result = await analyze_intent(
-                findings=state.all_findings,
-                repo_path=state.repo_path,
-                conventions=None,  # swarm doesn't extract conventions separately
-                model=cfg.model_for_role("intent_analyzer"),
-                ai_provider=cfg.provider_for_role("intent_analyzer"),
-            )
-            if intent_result.decisions:
-                logger.info(
-                    "Intent analysis: %d intentional, %d ambiguous, %d unintentional",
-                    intent_result.intentional_count,
-                    intent_result.ambiguous_count,
-                    intent_result.unintentional_count,
-                )
-        except Exception as e:
-            logger.warning("Intent analysis failed (non-fatal): %s", e)
-
-    # Apply actionability classification (deterministic post-processing)
-    if state.all_findings:
-        try:
-            from forge.execution.actionability import apply_actionability
-            apply_actionability(state.all_findings, cfg.project_context)
-        except Exception as e:
-            logger.warning("Actionability classification failed (non-fatal): %s", e)
-
-    # ── Fingerprint, Baseline, Suppression, Severity (swarm path) ───
-    findings_delta: dict = {}
-    quality_gate_result: dict = {}
-    if state.all_findings:
-        try:
-            from pathlib import Path as _Path
-
-            from forge.execution.baseline import Baseline
-            from forge.execution.fingerprint import fingerprint as _fingerprint
-            from forge.execution.forgeignore import ForgeIgnore
-            from forge.execution.severity import calibrate_findings
-
-            findings_dicts = [f.model_dump(mode="json") for f in state.all_findings]
-            for fd in findings_dicts:
-                fd["fingerprint"] = _fingerprint(fd)
-            calibrate_findings(findings_dicts)
-
-            forgeignore = ForgeIgnore.load(state.repo_path)
-            kept_dicts, suppressed_dicts = forgeignore.apply(findings_dicts)
-
-            artifacts_dir = state.artifacts_dir or str(
-                _Path(state.repo_path) / ".artifacts"
-            )
-            baseline = Baseline.load(artifacts_dir)
-            comparison = baseline.update_from_scan(state.forge_run_id, kept_dicts)
-
-            # Track HEAD SHA for delta mode
-            try:
-                from forge.execution.delta import get_head_sha, save_head_sha
-                head_sha = get_head_sha(state.repo_path)
-                if head_sha:
-                    save_head_sha(artifacts_dir, head_sha)
-            except Exception as e:
-                logger.debug("Could not record HEAD SHA: %s", e)
-
-            baseline.save(artifacts_dir)
-
-            findings_delta = {
-                "new": len(comparison.new_findings),
-                "recurring": len(comparison.recurring_findings),
-                "fixed": len(comparison.fixed_findings),
-                "suppressed": len(suppressed_dicts),
-                "regressed": len(comparison.regressed_findings),
-            }
-
-            # ── Quality Gate evaluation ──────────────────────────────
-            try:
-                from forge.execution.quality_gate import (
-                    QualityGateThreshold,
-                    evaluate_gate,
-                )
-                threshold = QualityGateThreshold(
-                    max_new_critical=cfg.quality_gate_max_critical,
-                    max_new_high=cfg.quality_gate_max_high,
-                    max_new_medium=cfg.quality_gate_max_medium,
-                )
-                gate_result = evaluate_gate(comparison.new_findings, threshold)
-                quality_gate_result = {
-                    "passed": gate_result.passed,
-                    "reason": gate_result.reason,
-                    "new_critical": gate_result.new_critical,
-                    "new_high": gate_result.new_high,
-                    "new_medium": gate_result.new_medium,
-                    "total_new": gate_result.total_new,
-                }
-                logger.info("Quality gate: %s", gate_result.reason)
-            except Exception as e:
-                logger.warning("Quality gate evaluation failed (non-fatal): %s", e)
-
-            # Apply severity changes and filter suppressed
-            sev_map = {fd.get("fingerprint", ""): fd.get("severity") for fd in kept_dicts}
-            kept_fps = {fd.get("fingerprint", "") for fd in kept_dicts}
-            fp_to_finding: dict[str, AuditFinding] = {}
-            for fd, finding in zip(findings_dicts, state.all_findings):
-                fp_to_finding[fd.get("fingerprint", "")] = finding
-
-            kept_findings: list[AuditFinding] = []
-            for fp_val in kept_fps:
-                finding = fp_to_finding.get(fp_val)
-                if finding:
-                    new_sev = sev_map.get(fp_val)
-                    if new_sev and new_sev != (finding.severity.value if hasattr(finding.severity, "value") else str(finding.severity)):
-                        finding.severity = FindingSeverity(new_sev)
-                    kept_findings.append(finding)
-
-            state.all_findings = kept_findings
-            state.security_findings = [f for f in kept_findings if (f.category.value if hasattr(f.category, "value") else str(f.category)) == "security"]
-            state.quality_findings = [f for f in kept_findings if (f.category.value if hasattr(f.category, "value") else str(f.category)) == "quality"]
-            state.architecture_findings = [f for f in kept_findings if (f.category.value if hasattr(f.category, "value") else str(f.category)) == "architecture"]
-
-            logger.info(
-                "Post-processing [swarm]: %d kept, %d suppressed, delta: %s",
-                len(kept_findings), len(suppressed_dicts), findings_delta,
-            )
-
-            # --- Feedback tracking ---
-            try:
-                from forge.execution.feedback import FeedbackTracker
-
-                feedback = FeedbackTracker.load(artifacts_dir)
-                fp_rates = feedback.update_from_scan(findings_dicts, suppressed_dicts)
-                feedback.save(artifacts_dir)
-                findings_delta["fp_rates"] = fp_rates
-            except Exception as _fb_err:
-                logger.warning("Feedback tracking failed (non-fatal): %s", _fb_err)
-
-            # --- Readiness score ---
-            try:
-                from forge.execution.readiness_score import readiness_breakdown
-
-                readiness = readiness_breakdown(
-                    [f.model_dump(mode="json") for f in kept_findings]
-                )
-                findings_delta["readiness"] = readiness
-            except Exception as _rs_err:
-                logger.warning("Readiness score failed (non-fatal): %s", _rs_err)
-
-        except Exception as e:
-            logger.warning("Fingerprint/baseline/severity processing failed (non-fatal): %s", e, exc_info=True)
-
-    # Parse triage result
-    triage_data = hive_result.get("triage_result", {})
-    if isinstance(triage_data, dict) and triage_data.get("decisions"):
-        state.triage_result = TriageResult(**triage_data)
-
-    # Parse remediation plan
-    plan_data = hive_result.get("remediation_plan", {})
-    if isinstance(plan_data, dict) and plan_data.get("items"):
-        state.remediation_plan = RemediationPlan(**plan_data)
-
-    invocations = hive_result.get("stats", {}).get("total_invocations", 1)
-
-    logger.info(
-        "Discovery [swarm]: complete — %d security, %d quality, %d architecture findings",
-        len(state.security_findings),
-        len(state.quality_findings),
-        len(state.architecture_findings),
-    )
-
-    return {
-        "invocations": invocations,
-        "findings_delta": findings_delta,
-        "quality_gate": quality_gate_result,
+        "evaluation": evaluation_result,
     }
 
 
@@ -670,15 +545,6 @@ async def _run_triage(
 
     if not state.all_findings:
         logger.info("Triage: No findings to triage")
-        return {"invocations": 0}
-
-    # Swarm mode: synthesis already produced triage + plan
-    if (
-        cfg.discovery_mode == "swarm"
-        and state.triage_result is not None
-        and state.remediation_plan is not None
-    ):
-        logger.info("Triage: skipping — swarm synthesis already produced triage + plan")
         return {"invocations": 0}
 
     all_findings_dicts = [f.model_dump() for f in state.all_findings]
@@ -705,20 +571,9 @@ async def _run_triage(
     else:
         codebase_map_dict = state.codebase_map.model_dump()
 
-    # Agent 6: Triage Classifier
-    emit_phase_start(cfg, "triage", "Running Agent 6 (Triage Classifier).")
-    logger.info("Triage: Running Agent 6 (Triage Classifier)")
-    triage_dict = await app.call(
-        f"{NODE_ID}.run_triage_classifier",
-        findings=all_findings_dicts,
-        codebase_map=codebase_map_dict,
-        artifacts_dir=state.artifacts_dir,
-        model=resolved_models.get("triage_classifier_model", "anthropic/claude-haiku-4.5"),
-        ai_provider=cfg.provider_for_role("triage_classifier"),
-    )
-    if isinstance(triage_dict, dict):
-        state.triage_result = TriageResult(**triage_dict)
-    invocations += 1
+    # DEPRECATED: Triage Classifier (Agent 6) removed in v3
+    # Tier assignment now handled by fix strategist directly
+    triage_dict = None
 
     # Agent 5: Fix Strategist
     logger.info("Triage: Running Agent 5 (Fix Strategist)")
@@ -802,184 +657,3 @@ async def _run_triage(
     return {"invocations": invocations}
 
 
-async def _run_remediation(
-    app,
-    state: ForgeExecutionState,
-    cfg: ForgeConfig,
-    resolved_models: dict[str, str],
-) -> dict:
-    """Run Remediation phase: Tier routing + SWE-AF execution for all AI items."""
-    from forge.execution.tier_router import route_plan_items
-
-    rt = _get_run_telemetry()
-    if rt:
-        rt.set_phase("remediation")
-    invocations = 0
-
-    if not state.remediation_plan or not state.remediation_plan.items:
-        logger.info("Remediation: no plan items to execute")
-        return {"invocations": 0}
-
-    # ── Step 3a: Tier 0/1 — deterministic fixes ──────────────────────
-    logger.info("Remediation: routing %d items through tier router", len(state.remediation_plan.items))
-    handled, sweaf_items = route_plan_items(
-        state.remediation_plan,
-        state.all_findings,
-        state,
-        state.repo_path,
-        cfg,
-    )
-    invocations += len(handled)  # Tier 0/1 count as 1 invocation each
-
-    if not sweaf_items:
-        logger.info("Remediation: all items handled by Tier 0/1 — skipping AI pipeline")
-        return {"invocations": invocations}
-
-    # ── Step 3b: ALL AI items (Tier 2 + Tier 3) → SWE-AF ────────────
-    try:
-        from forge.execution.sweaf_bridge import execute_tier3_via_sweaf
-        logger.info("Remediation: routing %d AI items to SWE-AF", len(sweaf_items))
-        results = await execute_tier3_via_sweaf(
-            sweaf_items, state.all_findings, state, cfg,
-        )
-        state.completed_fixes.extend(results)
-        invocations += len(sweaf_items)
-    except Exception as e:
-        logger.error("SWE-AF dispatch failed: %s", e)
-        if cfg.sweaf_fallback_to_forge:
-            logger.info("Falling back to FORGE executor for %d items", len(sweaf_items))
-            await _run_sweaf_fallback_via_forge(
-                app, state, cfg, resolved_models, sweaf_items,
-            )
-            invocations += state.total_agent_invocations
-
-    if rt:
-        actually_fixed = [
-            f for f in state.completed_fixes
-            if f.outcome in (FixOutcome.COMPLETED, FixOutcome.COMPLETED_WITH_DEBT)
-        ]
-        rt.update_findings_progress(
-            fixed=len(actually_fixed),
-            deferred=len(state.outer_loop.deferred_findings),
-        )
-
-    logger.info(
-        "Remediation complete: %d fixed, %d deferred",
-        len(state.completed_fixes), len(state.outer_loop.deferred_findings),
-    )
-
-    return {"invocations": invocations}
-
-
-async def _run_sweaf_fallback_via_forge(
-    app,
-    state: ForgeExecutionState,
-    cfg: ForgeConfig,
-    resolved_models: dict[str, str],
-    sweaf_items: list,
-) -> None:
-    """Fall back to FORGE executor when SWE-AF is unavailable."""
-    from forge.execution.forge_executor import execute_remediation
-
-    ai_plan = RemediationPlan(
-        items=sweaf_items,
-        execution_levels=_filter_execution_levels(
-            state.remediation_plan.execution_levels if state.remediation_plan else [],
-            {item.finding_id for item in sweaf_items},
-        ),
-        total_items=len(sweaf_items),
-    )
-    state.remediation_plan = ai_plan
-    await execute_remediation(app, NODE_ID, state, cfg, resolved_models)
-
-
-async def _run_validation(
-    app,
-    state: ForgeExecutionState,
-    cfg: ForgeConfig,
-    resolved_models: dict[str, str],
-) -> dict:
-    """Run Validation phase: Agents 11-12."""
-    rt = _get_run_telemetry()
-    if rt:
-        rt.set_phase("validation")
-    invocations = 0
-
-    if not state.completed_fixes:
-        logger.info("Validation: no fixes to validate")
-        return {"invocations": 0}
-
-    all_findings_json = [f.model_dump() for f in state.all_findings]
-    all_fixes_json = [f.model_dump() for f in state.completed_fixes]
-    deferred_items = [
-        {"finding_id": fid}
-        for fid in state.outer_loop.deferred_findings
-    ]
-
-    # Agent 11: Integration Validator
-    logger.info("Validation: Running Agent 11 (Integration Validator)")
-    try:
-        validation_dict = await app.call(
-            f"{NODE_ID}.run_integration_validator",
-            repo_path=state.repo_path,
-            all_findings=all_findings_json,
-            completed_fixes=all_fixes_json,
-            artifacts_dir=state.artifacts_dir,
-            model=resolved_models.get("integration_validator_model", "anthropic/claude-haiku-4.5"),
-            ai_provider=cfg.provider_for_role("integration_validator"),
-        )
-        if isinstance(validation_dict, dict):
-            state.integration_result = IntegrationValidationResult(
-                **_unwrap_to_model(validation_dict)
-                if isinstance(_unwrap_to_model(validation_dict), dict)
-                else {}
-            )
-        invocations += 1
-    except Exception as e:
-        logger.error("Integration validator failed: %s", e)
-        state.integration_result = IntegrationValidationResult(
-            passed=False, summary=f"Validator failed: {e}",
-        )
-
-    # Agent 12: Debt Tracker & Report Generator
-    logger.info("Validation: Running Agent 12 (Debt Tracker)")
-    try:
-        report_dict = await app.call(
-            f"{NODE_ID}.run_debt_tracker",
-            all_findings=all_findings_json,
-            completed_fixes=all_fixes_json,
-            deferred_items=deferred_items,
-            validation_result=state.integration_result.model_dump()
-            if state.integration_result else {},
-            artifacts_dir=state.artifacts_dir,
-            model=resolved_models.get("debt_tracker_model", "minimax/minimax-m2.5"),
-            ai_provider=cfg.provider_for_role("debt_tracker"),
-        )
-        if isinstance(report_dict, dict):
-            unwrapped = _unwrap_to_model(report_dict)
-            if isinstance(unwrapped, dict):
-                state.readiness_report = ProductionReadinessReport(**unwrapped)
-        invocations += 1
-    except Exception as e:
-        logger.error("Debt tracker failed: %s", e)
-
-    # Generate formatted reports (JSON + HTML + PDF if weasyprint available)
-    if state.readiness_report:
-        try:
-            from forge.execution.report import generate_reports
-            report_paths = generate_reports(
-                state.readiness_report,
-                state.artifacts_dir,
-                run_id=state.forge_run_id,
-            )
-            logger.info("Reports generated: %s", ", ".join(report_paths.keys()))
-        except Exception as e:
-            logger.error("Report generation failed: %s", e)
-
-    logger.info(
-        "Validation complete: integration=%s, readiness_score=%d",
-        "PASS" if state.integration_result and state.integration_result.passed else "FAIL",
-        state.readiness_report.overall_score if state.readiness_report else 0,
-    )
-
-    return {"invocations": invocations}

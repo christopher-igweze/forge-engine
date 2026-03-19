@@ -10,9 +10,8 @@ Code never leaves the user's machine — only LLM API calls go to
 OpenRouter via the user's own API key.
 
 The ``StandaloneDispatcher`` implements the same ``.call()`` interface
-as ``agentfield.Agent``, so the existing pipeline functions
-(``_run_discovery``, ``_run_triage``, ``forge_executor``, etc.) work
-unchanged with either the real AgentField app or this dispatcher.
+so the existing pipeline functions (``_run_discovery``, ``_run_triage``)
+work unchanged with this dispatcher.
 """
 
 from __future__ import annotations
@@ -31,9 +30,6 @@ from forge.schemas import (
     ForgeExecutionState,
     ForgeMode,
     ForgeResult,
-    IntegrationValidationResult,
-    ProductionReadinessReport,
-    RemediationPlan,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,41 +53,15 @@ class StandaloneDispatcher:
         from forge.reasoners.discovery import (
             run_codebase_analyst,
             run_security_auditor,
-            run_quality_auditor,
-            run_architecture_reviewer,
         )
         from forge.reasoners.triage import (
-            run_triage_classifier,
             run_fix_strategist,
         )
-        from forge.reasoners.remediation import (
-            run_coder_tier2,
-            run_coder_tier3,
-            run_test_generator,
-            run_code_reviewer,
-            run_escalation_agent,
-        )
-        from forge.reasoners.validation import (
-            run_integration_validator,
-            run_debt_tracker,
-        )
-        from forge.reasoners.hive_discovery import run_hive_discovery
 
         for fn in (
             run_codebase_analyst,
             run_security_auditor,
-            run_quality_auditor,
-            run_architecture_reviewer,
-            run_triage_classifier,
             run_fix_strategist,
-            run_coder_tier2,
-            run_coder_tier3,
-            run_test_generator,
-            run_code_reviewer,
-            run_escalation_agent,
-            run_integration_validator,
-            run_debt_tracker,
-            run_hive_discovery,
         ):
             self._registry[fn.__name__] = fn
 
@@ -168,18 +138,14 @@ async def run_standalone(
     config: dict | None = None,
     tier1_findings: list[dict] | None = None,
 ) -> ForgeResult:
-    """Run the full FORGE pipeline without AgentField.
+    """Run the FORGE discovery + triage pipeline without AgentField.
 
-    This is the standalone equivalent of the ``remediate`` reasoner
-    in ``forge/app.py``.  It uses ``StandaloneDispatcher`` instead of
-    the AgentField ``app`` for agent dispatch.
+    This is the primary entry point for CLI and tests. It uses
+    ``StandaloneDispatcher`` instead of AgentField for agent dispatch.
     """
-    # Import pipeline functions from app.py — they accept any object with .call()
-    from forge.app import (
+    from forge.phases import (
         _run_discovery,
         _run_triage,
-        _run_remediation,
-        _run_validation,
         _build_summary,
     )
 
@@ -222,15 +188,12 @@ async def run_standalone(
         _telemetry_ctx.__enter__()
 
     # Initialize RunTelemetry (real-time observable state + circuit breakers).
-    # Activate the contextvar BEFORE any LLM calls so AgentAI.run() can
-    # record costs from the very first invocation (including discovery).
     from forge.execution.run_telemetry import (
         RunTelemetry,
         CostLimitExceeded,
         TimeLimitExceeded,
         _current_run_telemetry,
     )
-    # Use a temp dir initially; we'll update once repo_path is resolved.
     import tempfile
     _tmp_telemetry_dir = tempfile.mkdtemp(prefix="forge-telemetry-")
     run_telemetry = RunTelemetry(
@@ -253,90 +216,18 @@ async def run_standalone(
         logger.info("FORGE standalone starting: %s", state.repo_path)
         emit_phase_start(cfg, "orchestrator", "Starting FORGE discovery scan.")
 
-        # Recover stale worktrees
-        try:
-            from forge.execution.worktree import recover_worktrees
-            recovered = recover_worktrees(state.repo_path)
-            if recovered:
-                logger.info("Recovered %d stale worktrees", len(recovered))
-        except Exception as e:
-            logger.warning("Worktree recovery failed (non-fatal): %s", e)
-
-        # Check for resumable checkpoint
-        from forge.execution.checkpoint import (
-            CheckpointPhase, save_checkpoint, get_latest_checkpoint,
-            restore_state, clear_checkpoints,
-        )
-        cp = get_latest_checkpoint(state.repo_path)
-        resume_phase = None
-        if cp and cp.forge_run_id:
-            logger.info("Resuming from checkpoint: %s (phase: %s)", cp.forge_run_id, cp.phase.value)
-            restored = restore_state(cp)
-            state.forge_run_id = restored.forge_run_id
-            state.codebase_map = restored.codebase_map
-            state.security_findings = restored.security_findings
-            state.quality_findings = restored.quality_findings
-            state.architecture_findings = restored.architecture_findings
-            state.all_findings = restored.all_findings
-            state.triage_result = restored.triage_result
-            state.remediation_plan = restored.remediation_plan
-            state.completed_fixes = restored.completed_fixes
-            state.outer_loop = restored.outer_loop
-            state.integration_result = restored.integration_result
-            state.readiness_report = restored.readiness_report
-            state.total_agent_invocations = restored.total_agent_invocations
-            resume_phase = cp.phase
-
         # Discovery
-        if resume_phase not in (
-            CheckpointPhase.DISCOVERY, CheckpointPhase.TRIAGE,
-            CheckpointPhase.REMEDIATION, CheckpointPhase.VALIDATION,
-        ):
-            result = await _run_discovery(dispatcher, state, cfg, resolved)
-            state.total_agent_invocations += result["invocations"]
-            # Capture v2 metadata from discovery for ForgeResult
-            state._v2_findings_delta = result.get("findings_delta")
-            state._v2_quality_gate = result.get("quality_gate")
-            save_checkpoint(state.repo_path, CheckpointPhase.DISCOVERY, state)
+        result = await _run_discovery(dispatcher, state, cfg, resolved)
+        state.total_agent_invocations += result["invocations"]
+        # Capture v2 metadata from discovery for ForgeResult
+        state._v2_findings_delta = result.get("findings_delta")
+        state._v2_quality_gate = result.get("quality_gate")
+        state._v3_evaluation = result.get("evaluation")
 
         # Triage
-        if resume_phase not in (
-            CheckpointPhase.TRIAGE, CheckpointPhase.REMEDIATION,
-            CheckpointPhase.VALIDATION,
-        ):
-            result = await _run_triage(dispatcher, state, cfg, resolved, tier1_findings)
-            state.total_agent_invocations += result["invocations"]
-            save_checkpoint(state.repo_path, CheckpointPhase.TRIAGE, state)
+        result = await _run_triage(dispatcher, state, cfg, resolved, tier1_findings)
+        state.total_agent_invocations += result["invocations"]
 
-        # Remediation + Validation (convergence loop or single-pass)
-        if cfg.mode in (ForgeMode.FULL, ForgeMode.REMEDIATION) and not cfg.dry_run:
-            if resume_phase not in (
-                CheckpointPhase.REMEDIATION, CheckpointPhase.VALIDATION,
-            ):
-                if cfg.convergence_enabled:
-                    from forge.execution.convergence import run_convergence_loop
-                    conv_result = await run_convergence_loop(
-                        dispatcher, state, cfg, resolved, tier1_findings,
-                    )
-                    logger.info(
-                        "Convergence: %s after %d iterations (score=%d)",
-                        "converged" if conv_result.converged else "stopped",
-                        conv_result.iterations_run, conv_result.final_score,
-                    )
-                else:
-                    result = await _run_remediation(dispatcher, state, cfg, resolved)
-                    state.total_agent_invocations += result["invocations"]
-                    save_checkpoint(state.repo_path, CheckpointPhase.REMEDIATION, state)
-
-        # Validation (only if convergence is disabled — convergence loop handles its own)
-        if cfg.mode in (ForgeMode.FULL, ForgeMode.VALIDATION) and not cfg.dry_run:
-            if not cfg.convergence_enabled:
-                if resume_phase != CheckpointPhase.VALIDATION:
-                    result = await _run_validation(dispatcher, state, cfg, resolved)
-                    state.total_agent_invocations += result["invocations"]
-                    save_checkpoint(state.repo_path, CheckpointPhase.VALIDATION, state)
-
-        clear_checkpoints(state.repo_path)
         state.success = True
         emit_scan_complete(
             cfg,
@@ -353,11 +244,6 @@ async def run_standalone(
         state.success = False
         emit_scan_error(cfg, f"FORGE scan failed: {e}")
     finally:
-        try:
-            from forge.execution.worktree import cleanup_all_worktrees
-            cleanup_all_worktrees(state.repo_path)
-        except Exception as e:
-            logger.warning("Worktree cleanup failed: %s", e)
         # Deactivate telemetry context (only if we created it)
         if _telemetry_ctx is not None:
             _telemetry_ctx.__exit__(None, None, None)
@@ -371,27 +257,8 @@ async def run_standalone(
 
     elapsed = time.time() - start_time
 
-    # Flush telemetry: invocations are already auto-logged by AgentAI.run()
+    # Flush telemetry
     telemetry.artifacts_dir = state.artifacts_dir
-    for fix in state.completed_fixes:
-        finding = next(
-            (f for f in state.all_findings if f.id == fix.finding_id), None,
-        )
-        if finding:
-            inner = state.inner_loop_states.get(fix.finding_id)
-            telemetry.log_training_pair(
-                finding_id=finding.id,
-                category=finding.category.value,
-                severity=finding.severity.value,
-                title=finding.title,
-                description=finding.description,
-                tier=finding.tier.value if finding.tier is not None else 2,
-                outcome=fix.outcome.value,
-                summary=fix.summary,
-                files_changed=fix.files_changed,
-                retry_count=inner.iteration if inner else 1,
-                escalated=fix.finding_id in state.outer_loop.deferred_findings,
-            )
     state.estimated_cost_usd = telemetry.total_cost
     telemetry.flush()
 
@@ -401,7 +268,7 @@ async def run_standalone(
     )
 
     # Generate discovery report (findings + remediation plan) after telemetry
-    # flush so cost_usd is populated. Runs for all modes that produce findings.
+    # flush so cost_usd is populated.
     discovery_report_data: dict | None = None
     if state.all_findings and state.artifacts_dir:
         try:
@@ -439,35 +306,31 @@ async def run_standalone(
         __import__("datetime").timezone.utc
     )
 
-    actually_fixed = [
-        f for f in state.completed_fixes
-        if f.outcome in (FixOutcome.COMPLETED, FixOutcome.COMPLETED_WITH_DEBT)
-    ]
-
     result = ForgeResult(
         forge_run_id=state.forge_run_id,
         success=state.success,
         mode=state.mode,
         summary=_build_summary(state),
         total_findings=len(state.all_findings),
-        findings_fixed=len(actually_fixed),
-        findings_deferred=len(state.outer_loop.deferred_findings),
+        findings_fixed=0,
+        findings_deferred=0,
         agent_invocations=state.total_agent_invocations,
         cost_usd=state.estimated_cost_usd,
         duration_seconds=elapsed,
-        convergence_iterations=state.convergence_iteration + 1 if state.convergence_records else 0,
-        readiness_report=state.readiness_report,
+        convergence_iterations=0,
+        readiness_report=None,
         discovery_report=discovery_report_data,
         findings_delta=getattr(state, "_v2_findings_delta", None),
         quality_gate=getattr(state, "_v2_quality_gate", None),
         estimated_readiness_score=(
             getattr(state, "_v2_findings_delta", {}) or {}
         ).get("readiness", {}).get("overall_score") if getattr(state, "_v2_findings_delta", None) else None,
+        evaluation=getattr(state, "_v3_evaluation", None),
     )
 
     logger.info(
-        "FORGE standalone complete: %s — %d findings, %d fixed, %.1fs",
+        "FORGE standalone complete: %s — %d findings, %.1fs",
         "SUCCESS" if result.success else "FAILED",
-        result.total_findings, result.findings_fixed, elapsed,
+        result.total_findings, elapsed,
     )
     return result

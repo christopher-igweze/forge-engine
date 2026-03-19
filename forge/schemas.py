@@ -630,3 +630,9 @@ class ForgeResult(BaseModel):
     findings_delta: dict | None = None  # new/recurring/fixed/regressed/suppressed counts
     quality_gate: dict | None = None  # passed/reason/new_critical/new_high
     estimated_readiness_score: int | None = None  # 0-100 discovery-mode estimate
+
+    # v3: Deterministic evaluation framework
+    evaluation: dict | None = None  # Full v3 evaluation report (scores, gate, compliance)
+
+    # v3: AIVSS scoring
+    aivss_score: dict | None = None  # AIVSS result with score, severity, factors

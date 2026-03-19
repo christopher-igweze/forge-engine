@@ -164,7 +164,6 @@ async def forge_scan(path: str, model: str | None = None) -> dict:
 
     config: dict = {
         "mode": "discovery",
-        "dry_run": True,
         "repo_path": repo_path,
     }
     if model:

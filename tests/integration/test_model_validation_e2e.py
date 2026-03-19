@@ -96,16 +96,10 @@ def _clone_repo(repo_cfg: dict, dest: Path) -> Path:
 
 
 def _make_config() -> dict:
-    """Build config for full remediation using default models (MiniMax M2.5 coders)."""
+    """Build config for discovery + triage pipeline."""
     return {
         "runtime": "open_code",
         "mode": "full",
-        "dry_run": False,
-        "enable_learning": True,
-        "enable_github_pr": False,  # We handle PR creation ourselves
-        "max_inner_retries": 2,
-        "max_middle_escalations": 1,
-        "max_outer_replans": 0,
     }
 
 

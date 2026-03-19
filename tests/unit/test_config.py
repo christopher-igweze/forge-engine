@@ -23,21 +23,21 @@ class TestForgeConfig:
             assert model == "test/model-v1"
 
     def test_role_override(self):
-        cfg = ForgeConfig(models={"coder_tier2": "anthropic/claude-opus-4"})
+        cfg = ForgeConfig(models={"security_auditor": "anthropic/claude-opus-4"})
         resolved = cfg.resolved_models()
-        assert resolved["coder_tier2_model"] == "anthropic/claude-opus-4"
+        assert resolved["security_auditor_model"] == "anthropic/claude-opus-4"
         # Other roles unchanged
-        assert resolved["coder_tier3_model"] == FORGE_DEFAULT_MODELS["coder_tier3_model"]
+        assert resolved["codebase_analyst_model"] == FORGE_DEFAULT_MODELS["codebase_analyst_model"]
 
     def test_role_override_with_default(self):
-        cfg = ForgeConfig(models={"default": "test/base", "coder_tier2": "test/premium"})
+        cfg = ForgeConfig(models={"default": "test/base", "security_auditor": "test/premium"})
         resolved = cfg.resolved_models()
-        assert resolved["coder_tier2_model"] == "test/premium"
-        assert resolved["coder_tier3_model"] == "test/base"
+        assert resolved["security_auditor_model"] == "test/premium"
+        assert resolved["codebase_analyst_model"] == "test/base"
 
     def test_model_for_role(self):
         cfg = ForgeConfig()
-        assert cfg.model_for_role("coder_tier2") == "anthropic/claude-sonnet-4.6"
+        assert cfg.model_for_role("security_auditor") == "anthropic/claude-haiku-4.5"
         assert cfg.model_for_role("codebase_analyst") == "minimax/minimax-m2.5"
 
     def test_model_for_unknown_role(self):
@@ -47,8 +47,8 @@ class TestForgeConfig:
 
     def test_provider_for_role(self):
         cfg = ForgeConfig()
-        assert cfg.provider_for_role("coder_tier2") == "opencode"
-        assert cfg.provider_for_role("code_reviewer") == "openrouter_direct"
+        assert cfg.provider_for_role("security_auditor") == "openrouter_direct"
+        assert cfg.provider_for_role("fix_strategist") == "openrouter_direct"
 
     def test_provider_for_unknown_role(self):
         cfg = ForgeConfig()
@@ -57,14 +57,6 @@ class TestForgeConfig:
     def test_extra_fields_forbidden(self):
         with pytest.raises(Exception):
             ForgeConfig(nonexistent_field="value")
-
-    def test_skip_tiers_default(self):
-        cfg = ForgeConfig()
-        assert cfg.skip_tiers == []
-
-    def test_focus_categories_default(self):
-        cfg = ForgeConfig()
-        assert cfg.focus_categories == []
 
     def test_all_roles_have_models(self):
         """Every role in FORGE_ROLE_TO_MODEL_FIELD maps to a key in FORGE_DEFAULT_MODELS."""
@@ -82,7 +74,7 @@ class TestForgeConfig:
         resolved = cfg.resolved_models()
         assert resolved != FORGE_DEFAULT_MODELS
         # Verify defaults are NOT mutated
-        assert FORGE_DEFAULT_MODELS["coder_tier2_model"] == "anthropic/claude-sonnet-4.6"
+        assert FORGE_DEFAULT_MODELS["security_auditor_model"] == "anthropic/claude-haiku-4.5"
 
     def test_unknown_role_override_ignored(self):
         """Overriding a role not in FORGE_ROLE_TO_MODEL_FIELD has no effect."""
@@ -92,15 +84,8 @@ class TestForgeConfig:
 
     def test_default_config_values(self):
         cfg = ForgeConfig()
-        assert cfg.max_inner_retries == 3
-        assert cfg.max_middle_escalations == 2
-        assert cfg.max_outer_replans == 1
         assert cfg.agent_timeout_seconds == 900
-        assert cfg.enable_tier0_autofix is True
-        assert cfg.enable_tier1_rules is True
         assert cfg.enable_parallel_audit is True
-        assert cfg.enable_learning is True
-        assert cfg.dry_run is False
 
     def test_pattern_library_path_default(self):
         cfg = ForgeConfig()

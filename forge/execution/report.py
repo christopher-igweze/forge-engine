@@ -53,7 +53,7 @@ def generate_discovery_report(
 ) -> tuple[dict[str, str], dict]:
     """Generate a discovery-phase report with all findings and remediation plan.
 
-    Called after discovery+triage (Agents 1-7) even in dry_run mode.
+    Called after discovery+triage to produce the final scan report.
     Returns a tuple of (paths dict, report_data dict).
     The paths dict maps {format: file_path} for generated reports.
     The report_data dict contains the full structured discovery report.
