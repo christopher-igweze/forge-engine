@@ -1,0 +1,74 @@
+rules:
+  - id: forge.security.ssrf-requests
+    languages: [python]
+    pattern-either:
+      - patterns:
+          - pattern: requests.get($URL, ...)
+          - pattern-not: requests.get("...", ...)
+      - patterns:
+          - pattern: requests.post($URL, ...)
+          - pattern-not: requests.post("...", ...)
+      - patterns:
+          - pattern: requests.put($URL, ...)
+          - pattern-not: requests.put("...", ...)
+      - patterns:
+          - pattern: requests.delete($URL, ...)
+          - pattern-not: requests.delete("...", ...)
+    message: "Server-side request forgery risk: '$URL' may be user-controlled. Validate the URL against an allowlist before making the request."
+    severity: WARNING
+    metadata:
+      category: security
+      subcategory: ssrf
+      cwe:
+        - "CWE-918: Server-Side Request Forgery (SSRF)"
+      owasp:
+        - "A10:2021 - Server-Side Request Forgery"
+      forge-check-id: SEC-015
+      confidence: MEDIUM
+      impact: HIGH
+
+  - id: forge.security.ssrf-fetch
+    languages: [javascript, typescript]
+    patterns:
+      - pattern: fetch($URL, ...)
+      - pattern-not: fetch("...", ...)
+    message: "Server-side request forgery risk: '$URL' may be user-controlled. Validate the URL against an allowlist before making the request."
+    severity: WARNING
+    metadata:
+      category: security
+      subcategory: ssrf
+      cwe:
+        - "CWE-918: Server-Side Request Forgery (SSRF)"
+      owasp:
+        - "A10:2021 - Server-Side Request Forgery"
+      forge-check-id: SEC-016
+      confidence: MEDIUM
+      impact: HIGH
+
+  - id: forge.security.ssrf-httpx
+    languages: [python]
+    pattern-either:
+      - patterns:
+          - pattern: httpx.get($URL, ...)
+          - pattern-not: httpx.get("...", ...)
+      - patterns:
+          - pattern: httpx.post($URL, ...)
+          - pattern-not: httpx.post("...", ...")
+      - patterns:
+          - pattern: $CLIENT.get($URL, ...)
+          - pattern-not: $CLIENT.get("...", ...)
+          - pattern-inside: |
+              $CLIENT = httpx.AsyncClient(...)
+              ...
+    message: "Server-side request forgery risk: '$URL' may be user-controlled. Validate the URL against an allowlist before making the request."
+    severity: WARNING
+    metadata:
+      category: security
+      subcategory: ssrf
+      cwe:
+        - "CWE-918: Server-Side Request Forgery (SSRF)"
+      owasp:
+        - "A10:2021 - Server-Side Request Forgery"
+      forge-check-id: SEC-017
+      confidence: MEDIUM
+      impact: HIGH

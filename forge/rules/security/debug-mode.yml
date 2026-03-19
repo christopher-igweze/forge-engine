@@ -1,0 +1,52 @@
+rules:
+  - id: forge.security.debug-mode-flask
+    languages: [python]
+    pattern-either:
+      - pattern: $APP.run(..., debug=True, ...)
+      - pattern: app.run(..., debug=True, ...)
+    message: "Flask debug mode enabled. This exposes the Werkzeug debugger which allows arbitrary code execution. Disable in production."
+    severity: ERROR
+    metadata:
+      category: security
+      subcategory: debug-mode
+      cwe:
+        - "CWE-489: Active Debug Code"
+      owasp:
+        - "A05:2021 - Security Misconfiguration"
+      forge-check-id: SEC-030
+      confidence: HIGH
+      impact: HIGH
+
+  - id: forge.security.debug-mode-django
+    languages: [python]
+    pattern: DEBUG = True
+    message: "Django DEBUG mode enabled. This exposes detailed error pages with stack traces, settings, and environment info. Set to False in production."
+    severity: ERROR
+    metadata:
+      category: security
+      subcategory: debug-mode
+      cwe:
+        - "CWE-489: Active Debug Code"
+      owasp:
+        - "A05:2021 - Security Misconfiguration"
+      forge-check-id: SEC-031
+      confidence: MEDIUM
+      impact: HIGH
+
+  - id: forge.security.debug-mode-fastapi
+    languages: [python]
+    pattern-either:
+      - pattern: FastAPI(..., debug=True, ...)
+      - pattern: uvicorn.run(..., debug=True, ...)
+    message: "Debug mode enabled in FastAPI/Uvicorn. Disable in production to prevent information leakage."
+    severity: WARNING
+    metadata:
+      category: security
+      subcategory: debug-mode
+      cwe:
+        - "CWE-489: Active Debug Code"
+      owasp:
+        - "A05:2021 - Security Misconfiguration"
+      forge-check-id: SEC-032
+      confidence: HIGH
+      impact: MEDIUM

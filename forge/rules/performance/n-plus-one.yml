@@ -1,0 +1,55 @@
+rules:
+  - id: forge.performance.n-plus-one-python
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: |
+              for $ITEM in $COLLECTION:
+                  ...
+                  $CURSOR.execute(...)
+                  ...
+          - pattern: |
+              for $ITEM in $COLLECTION:
+                  ...
+                  $DB.execute(...)
+                  ...
+          - pattern: |
+              for $ITEM in $COLLECTION:
+                  ...
+                  $CONN.execute(...)
+                  ...
+    message: "Potential N+1 query: database query inside a loop. Consider using a batch query, JOIN, or prefetch to reduce database round trips."
+    severity: WARNING
+    metadata:
+      category: performance
+      subcategory: n-plus-one
+      forge-check-id: PRF-001
+      confidence: MEDIUM
+      impact: HIGH
+
+  - id: forge.performance.n-plus-one-sqlalchemy
+    languages: [python]
+    pattern-either:
+      - pattern: |
+          for $ITEM in $COLLECTION:
+              ...
+              $SESSION.query(...).filter(...).first()
+              ...
+      - pattern: |
+          for $ITEM in $COLLECTION:
+              ...
+              $SESSION.query(...).filter(...).all()
+              ...
+      - pattern: |
+          for $ITEM in $COLLECTION:
+              ...
+              $SESSION.execute(...)
+              ...
+    message: "Potential N+1 query: SQLAlchemy query inside a loop. Use eager loading (joinedload/subqueryload), batch queries, or in_() filters."
+    severity: WARNING
+    metadata:
+      category: performance
+      subcategory: n-plus-one
+      forge-check-id: PRF-002
+      confidence: MEDIUM
+      impact: HIGH

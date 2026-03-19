@@ -1,0 +1,57 @@
+rules:
+  - id: forge.performance.sync-requests-in-async
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: requests.get(...)
+          - pattern: requests.post(...)
+          - pattern: requests.put(...)
+          - pattern: requests.delete(...)
+          - pattern: requests.patch(...)
+      - pattern-inside: |
+          async def $FUNC(...):
+              ...
+    message: "Synchronous HTTP request (requests library) inside async function blocks the event loop. Use httpx.AsyncClient or aiohttp instead."
+    severity: WARNING
+    metadata:
+      category: performance
+      subcategory: sync-in-async
+      cwe:
+        - "CWE-400: Uncontrolled Resource Consumption"
+      forge-check-id: PRF-003
+      confidence: HIGH
+      impact: HIGH
+
+  - id: forge.performance.sync-sleep-in-async
+    languages: [python]
+    patterns:
+      - pattern: time.sleep(...)
+      - pattern-inside: |
+          async def $FUNC(...):
+              ...
+    message: "time.sleep() inside async function blocks the event loop. Use 'await asyncio.sleep()' instead."
+    severity: WARNING
+    metadata:
+      category: performance
+      subcategory: sync-in-async
+      cwe:
+        - "CWE-400: Uncontrolled Resource Consumption"
+      forge-check-id: PRF-004
+      confidence: HIGH
+      impact: HIGH
+
+  - id: forge.performance.sync-open-in-async
+    languages: [python]
+    patterns:
+      - pattern: open($FILE, ...)
+      - pattern-inside: |
+          async def $FUNC(...):
+              ...
+    message: "Synchronous file I/O inside async function blocks the event loop. Use aiofiles.open() or run_in_executor() instead."
+    severity: INFO
+    metadata:
+      category: performance
+      subcategory: sync-in-async
+      forge-check-id: PRF-005
+      confidence: HIGH
+      impact: MEDIUM

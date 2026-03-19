@@ -1,0 +1,72 @@
+rules:
+  - id: forge.security.verbose-error-traceback
+    languages: [python]
+    pattern-either:
+      - pattern: |
+          return $RESPONSE(..., content=traceback.format_exc(), ...)
+      - pattern: |
+          return {"...", "error": traceback.format_exc()}
+      - pattern: |
+          return JSONResponse(..., content={..., "detail": traceback.format_exc(), ...}, ...)
+    message: "Full traceback returned in HTTP response. This leaks internal code paths and file structure. Log the traceback server-side and return a generic error message."
+    severity: ERROR
+    metadata:
+      category: security
+      subcategory: verbose-errors
+      cwe:
+        - "CWE-209: Generation of Error Message Containing Sensitive Information"
+      owasp:
+        - "A05:2021 - Security Misconfiguration"
+      forge-check-id: SEC-033
+      confidence: HIGH
+      impact: MEDIUM
+
+  - id: forge.security.verbose-error-str-exception
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: |
+              return JSONResponse(..., content={..., "detail": str($E), ...}, ...)
+          - pattern: |
+              return {"error": str($E)}
+          - pattern: |
+              return {"detail": str($E)}
+      - pattern-inside: |
+          except $EXCEPTION as $E:
+              ...
+    message: "Raw exception message returned in HTTP response. This may leak sensitive internal details. Return a generic error message and log the exception server-side."
+    severity: WARNING
+    metadata:
+      category: security
+      subcategory: verbose-errors
+      cwe:
+        - "CWE-209: Generation of Error Message Containing Sensitive Information"
+      owasp:
+        - "A05:2021 - Security Misconfiguration"
+      forge-check-id: SEC-034
+      confidence: MEDIUM
+      impact: MEDIUM
+
+  - id: forge.security.error-details-in-response
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: |
+              return JSONResponse(status_code=$CODE, content={..., "traceback": $TB, ...})
+          - pattern: |
+              return JSONResponse(status_code=$CODE, content={..., "stack": $STACK, ...})
+      - metavariable-regex:
+          metavariable: $CODE
+          regex: "[45]\\d\\d"
+    message: "Error response includes traceback or stack details. Return generic error messages in production responses."
+    severity: WARNING
+    metadata:
+      category: security
+      subcategory: verbose-errors
+      cwe:
+        - "CWE-209: Generation of Error Message Containing Sensitive Information"
+      owasp:
+        - "A05:2021 - Security Misconfiguration"
+      forge-check-id: SEC-035
+      confidence: MEDIUM
+      impact: MEDIUM

@@ -1,0 +1,43 @@
+rules:
+  - id: forge.security.path-traversal-open
+    languages: [python]
+    patterns:
+      - pattern: open($PATH, ...)
+      - pattern-not: open("...", ...)
+      - pattern-not-inside: |
+          with open(__file__, ...) as $F:
+              ...
+    message: "Path traversal risk: '$PATH' may be user-controlled. Validate and sanitize the path before opening the file."
+    severity: WARNING
+    metadata:
+      category: security
+      subcategory: path-traversal
+      cwe:
+        - "CWE-22: Path Traversal"
+      owasp:
+        - "A01:2021 - Broken Access Control"
+      forge-check-id: SEC-018
+      confidence: MEDIUM
+      impact: HIGH
+
+  - id: forge.security.path-traversal-send-file
+    languages: [python]
+    pattern-either:
+      - patterns:
+          - pattern: send_file($PATH, ...)
+          - pattern-not: send_file("...", ...)
+      - patterns:
+          - pattern: send_from_directory($DIR, $FILENAME, ...)
+          - pattern-not: send_from_directory("...", "...", ...)
+    message: "Path traversal risk in file serving. Validate the path against a safe base directory before sending."
+    severity: WARNING
+    metadata:
+      category: security
+      subcategory: path-traversal
+      cwe:
+        - "CWE-22: Path Traversal"
+      owasp:
+        - "A01:2021 - Broken Access Control"
+      forge-check-id: SEC-019
+      confidence: MEDIUM
+      impact: HIGH

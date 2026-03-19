@@ -1,0 +1,83 @@
+rules:
+  - id: forge.security.insecure-hash-md5
+    languages: [python]
+    pattern: hashlib.md5(...)
+    message: "MD5 is cryptographically broken. Use hashlib.sha256() or stronger for security-sensitive hashing. MD5 is acceptable only for non-security checksums."
+    severity: WARNING
+    metadata:
+      category: security
+      subcategory: insecure-crypto
+      cwe:
+        - "CWE-328: Use of Weak Hash"
+      owasp:
+        - "A02:2021 - Cryptographic Failures"
+      forge-check-id: SEC-020
+      confidence: MEDIUM
+      impact: MEDIUM
+
+  - id: forge.security.insecure-hash-sha1
+    languages: [python]
+    pattern: hashlib.sha1(...)
+    message: "SHA-1 is cryptographically weak. Use hashlib.sha256() or stronger for security-sensitive hashing."
+    severity: WARNING
+    metadata:
+      category: security
+      subcategory: insecure-crypto
+      cwe:
+        - "CWE-328: Use of Weak Hash"
+      owasp:
+        - "A02:2021 - Cryptographic Failures"
+      forge-check-id: SEC-021
+      confidence: MEDIUM
+      impact: MEDIUM
+
+  - id: forge.security.weak-random-python
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: random.random()
+          - pattern: random.randint(...)
+          - pattern: random.choice(...)
+          - pattern: random.randrange(...)
+      - pattern-inside: |
+          def $FUNC(...):
+              ...
+      - metavariable-regex:
+          metavariable: $FUNC
+          regex: (?i)(.*token.*|.*secret.*|.*password.*|.*key.*|.*salt.*|.*nonce.*|.*auth.*)
+    message: "Using weak PRNG (random module) in a security-sensitive context. Use secrets module or os.urandom() instead."
+    severity: ERROR
+    metadata:
+      category: security
+      subcategory: insecure-crypto
+      cwe:
+        - "CWE-338: Use of Cryptographically Weak PRNG"
+      owasp:
+        - "A02:2021 - Cryptographic Failures"
+      forge-check-id: SEC-022
+      confidence: MEDIUM
+      impact: HIGH
+
+  - id: forge.security.weak-random-js
+    languages: [javascript, typescript]
+    patterns:
+      - pattern: Math.random()
+      - pattern-inside: |
+          function $FUNC(...) {
+            ...
+          }
+      - metavariable-regex:
+          metavariable: $FUNC
+          regex: (?i)(.*token.*|.*secret.*|.*password.*|.*key.*|.*salt.*|.*nonce.*|.*auth.*)
+    message: "Using Math.random() in a security-sensitive context. Use crypto.randomBytes() or crypto.getRandomValues() instead."
+    severity: ERROR
+    metadata:
+      category: security
+      subcategory: insecure-crypto
+      cwe:
+        - "CWE-338: Use of Cryptographically Weak PRNG"
+      owasp:
+        - "A02:2021 - Cryptographic Failures"
+      forge-check-id: SEC-023
+      confidence: MEDIUM
+      impact: HIGH

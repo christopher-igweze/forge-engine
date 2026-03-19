@@ -1,0 +1,44 @@
+rules:
+  - id: forge.security.default-password
+    languages: [python, javascript, typescript]
+    pattern-either:
+      - pattern: $VAR = "password"
+      - pattern: $VAR = "admin"
+      - pattern: $VAR = "changeme"
+      - pattern: $VAR = "123456"
+      - pattern: $VAR = "default"
+      - pattern: $VAR = "root"
+    message: "Default/weak password detected. Use strong, unique passwords loaded from environment or secrets manager."
+    severity: ERROR
+    metadata:
+      category: security
+      subcategory: insecure-defaults
+      cwe:
+        - "CWE-798: Use of Hard-coded Credentials"
+      owasp:
+        - "A07:2021 - Identification and Authentication Failures"
+      forge-check-id: SEC-036
+      confidence: MEDIUM
+      impact: HIGH
+
+  - id: forge.security.default-secret-key
+    languages: [python]
+    patterns:
+      - pattern: SECRET_KEY = "..."
+      - pattern-not: SECRET_KEY = os.environ.get(...)
+      - pattern-not: SECRET_KEY = os.getenv(...)
+    pattern-not-inside: |
+      def test_...(...):
+          ...
+    message: "Hardcoded SECRET_KEY. Use an environment variable: SECRET_KEY = os.environ['SECRET_KEY']."
+    severity: ERROR
+    metadata:
+      category: security
+      subcategory: insecure-defaults
+      cwe:
+        - "CWE-798: Use of Hard-coded Credentials"
+      owasp:
+        - "A05:2021 - Security Misconfiguration"
+      forge-check-id: SEC-037
+      confidence: HIGH
+      impact: HIGH

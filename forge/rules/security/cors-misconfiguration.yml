@@ -1,0 +1,55 @@
+rules:
+  - id: forge.security.cors-wildcard
+    languages: [python]
+    pattern-either:
+      - pattern: allow_origins=["*"]
+      - pattern: CORSMiddleware(..., allow_origins=["*"], ...)
+      - pattern: CORS($APP, origins=["*"], ...)
+    message: "CORS wildcard origin allows any website to make requests. Specify allowed origins explicitly."
+    severity: WARNING
+    metadata:
+      category: security
+      subcategory: cors-misconfiguration
+      cwe:
+        - "CWE-942: Overly Permissive Cross-domain Whitelist"
+      owasp:
+        - "A05:2021 - Security Misconfiguration"
+      forge-check-id: SEC-027
+      confidence: HIGH
+      impact: MEDIUM
+
+  - id: forge.security.cors-wildcard-js
+    languages: [javascript, typescript]
+    pattern-either:
+      - pattern: "cors({ origin: '*' })"
+      - pattern: "cors({ origin: true })"
+      - pattern: '$RES.header("Access-Control-Allow-Origin", "*")'
+      - pattern: '$RES.setHeader("Access-Control-Allow-Origin", "*")'
+    message: "CORS wildcard origin allows any website to make requests. Specify allowed origins explicitly."
+    severity: WARNING
+    metadata:
+      category: security
+      subcategory: cors-misconfiguration
+      cwe:
+        - "CWE-942: Overly Permissive Cross-domain Whitelist"
+      owasp:
+        - "A05:2021 - Security Misconfiguration"
+      forge-check-id: SEC-028
+      confidence: HIGH
+      impact: MEDIUM
+
+  - id: forge.security.cors-credentials-wildcard
+    languages: [python]
+    pattern: CORSMiddleware(..., allow_origins=["*"], ..., allow_credentials=True, ...)
+    message: "CORS with credentials and wildcard origin is a critical misconfiguration. Browsers block this, but it signals intent to expose credentials broadly."
+    severity: ERROR
+    metadata:
+      category: security
+      subcategory: cors-misconfiguration
+      cwe:
+        - "CWE-942: Overly Permissive Cross-domain Whitelist"
+      owasp:
+        - "A05:2021 - Security Misconfiguration"
+      forge-check-id: SEC-029
+      confidence: HIGH
+      impact: HIGH

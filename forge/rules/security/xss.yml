@@ -1,0 +1,57 @@
+rules:
+  - id: forge.security.xss-dangerously-set
+    languages: [javascript, typescript]
+    pattern: "dangerouslySetInnerHTML={{__html: $VAR}}"
+    message: "Cross-site scripting risk via dangerouslySetInnerHTML. Sanitize '$VAR' with DOMPurify or similar before rendering."
+    severity: ERROR
+    metadata:
+      category: security
+      subcategory: xss
+      cwe:
+        - "CWE-79: Cross-site Scripting (XSS)"
+      owasp:
+        - "A03:2021 - Injection"
+      forge-check-id: SEC-012
+      confidence: MEDIUM
+      impact: HIGH
+
+  - id: forge.security.xss-document-write
+    languages: [javascript, typescript]
+    pattern-either:
+      - patterns:
+          - pattern: document.write($VAR)
+          - pattern-not: document.write("...")
+      - patterns:
+          - pattern: $EL.innerHTML = $VAR
+          - pattern-not: $EL.innerHTML = "..."
+    message: "Cross-site scripting risk via direct DOM manipulation with unsanitized data. Use textContent or sanitize input first."
+    severity: ERROR
+    metadata:
+      category: security
+      subcategory: xss
+      cwe:
+        - "CWE-79: Cross-site Scripting (XSS)"
+      owasp:
+        - "A03:2021 - Injection"
+      forge-check-id: SEC-013
+      confidence: MEDIUM
+      impact: HIGH
+
+  - id: forge.security.xss-jinja-safe-filter
+    languages: [python]
+    pattern-either:
+      - pattern: Markup($VAR)
+      - pattern: "Markup(f\"...{$VAR}...\")"
+      - pattern: "Markup(\"...\".format(...))"
+    message: "Cross-site scripting risk via Jinja2 Markup() with user-controlled data. Ensure input is sanitized before marking as safe."
+    severity: WARNING
+    metadata:
+      category: security
+      subcategory: xss
+      cwe:
+        - "CWE-79: Cross-site Scripting (XSS)"
+      owasp:
+        - "A03:2021 - Injection"
+      forge-check-id: SEC-014
+      confidence: MEDIUM
+      impact: HIGH

@@ -1,0 +1,35 @@
+rules:
+  - id: forge.quality.bare-except
+    languages: [python]
+    patterns:
+      - pattern: |
+          try:
+              ...
+          except:
+              ...
+    message: "Bare 'except:' catches all exceptions including SystemExit and KeyboardInterrupt. Catch a specific exception type instead."
+    severity: WARNING
+    metadata:
+      category: quality
+      subcategory: error-handling
+      cwe:
+        - "CWE-396: Declaration of Catch for Generic Exception"
+      forge-check-id: REL-001
+      confidence: HIGH
+      impact: MEDIUM
+
+  - id: forge.quality.broad-except
+    languages: [python]
+    pattern: |
+      try:
+          ...
+      except Exception:
+          ...
+    message: "Catching broad 'Exception' may mask unexpected errors. Prefer catching specific exception types."
+    severity: INFO
+    metadata:
+      category: quality
+      subcategory: error-handling
+      forge-check-id: REL-002
+      confidence: MEDIUM
+      impact: LOW

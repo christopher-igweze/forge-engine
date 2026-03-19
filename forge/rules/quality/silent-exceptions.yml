@@ -1,0 +1,56 @@
+rules:
+  - id: forge.quality.silent-except-pass
+    languages: [python]
+    pattern: |
+      try:
+          ...
+      except $EXCEPTION:
+          pass
+    message: "Exception '$EXCEPTION' is silently swallowed. At minimum, log the exception so failures are not hidden."
+    severity: WARNING
+    metadata:
+      category: quality
+      subcategory: silent-exceptions
+      cwe:
+        - "CWE-391: Unchecked Error Condition"
+      forge-check-id: REL-003
+      confidence: HIGH
+      impact: MEDIUM
+
+  - id: forge.quality.silent-except-pass-bare
+    languages: [python]
+    pattern: |
+      try:
+          ...
+      except:
+          pass
+    message: "All exceptions silently swallowed. This hides bugs and makes debugging impossible. Handle or log exceptions appropriately."
+    severity: ERROR
+    metadata:
+      category: quality
+      subcategory: silent-exceptions
+      cwe:
+        - "CWE-391: Unchecked Error Condition"
+      forge-check-id: REL-004
+      confidence: HIGH
+      impact: HIGH
+
+  - id: forge.quality.silent-except-continue
+    languages: [python]
+    pattern: |
+      for ... in ...:
+          ...
+          try:
+              ...
+          except $EXCEPTION:
+              continue
+    message: "Exception '$EXCEPTION' silently skipped in loop. Log the error or handle it to avoid hiding failures."
+    severity: WARNING
+    metadata:
+      category: quality
+      subcategory: silent-exceptions
+      cwe:
+        - "CWE-391: Unchecked Error Condition"
+      forge-check-id: REL-005
+      confidence: HIGH
+      impact: MEDIUM

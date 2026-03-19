@@ -1,0 +1,97 @@
+rules:
+  - id: forge.security.sql-injection-python-fstring
+    languages: [python]
+    pattern-either:
+      - pattern: $CURSOR.execute(f"...{$VAR}...")
+      - pattern: $DB.execute(f"...{$VAR}...")
+      - pattern: $CONN.execute(f"...{$VAR}...")
+    message: "SQL injection via f-string in execute(). Use parameterized queries instead."
+    severity: ERROR
+    metadata:
+      category: security
+      subcategory: sql-injection
+      cwe:
+        - "CWE-89: SQL Injection"
+      owasp:
+        - "A03:2021 - Injection"
+      forge-check-id: SEC-004
+      confidence: HIGH
+      impact: HIGH
+
+  - id: forge.security.sql-injection-python-format
+    languages: [python]
+    pattern-either:
+      - pattern: $CURSOR.execute("...".format(...))
+      - pattern: $DB.execute("...".format(...))
+      - pattern: $CONN.execute("...".format(...))
+    message: "SQL injection via .format() in execute(). Use parameterized queries instead."
+    severity: ERROR
+    metadata:
+      category: security
+      subcategory: sql-injection
+      cwe:
+        - "CWE-89: SQL Injection"
+      owasp:
+        - "A03:2021 - Injection"
+      forge-check-id: SEC-005
+      confidence: HIGH
+      impact: HIGH
+
+  - id: forge.security.sql-injection-python-percent
+    languages: [python]
+    pattern-either:
+      - pattern: $CURSOR.execute("..." % $VAR)
+      - pattern: $DB.execute("..." % $VAR)
+      - pattern: $CONN.execute("..." % $VAR)
+    message: "SQL injection via string interpolation (%) in execute(). Use parameterized queries instead."
+    severity: ERROR
+    metadata:
+      category: security
+      subcategory: sql-injection
+      cwe:
+        - "CWE-89: SQL Injection"
+      owasp:
+        - "A03:2021 - Injection"
+      forge-check-id: SEC-006
+      confidence: HIGH
+      impact: HIGH
+
+  - id: forge.security.sql-injection-python-orm
+    languages: [python]
+    pattern-either:
+      - pattern: text(f"...{$VAR}...")
+      - pattern: text("...".format(...))
+      - pattern: text("..." % $VAR)
+    message: "SQL injection via string interpolation in SQLAlchemy text(). Use bound parameters: text('SELECT ... WHERE id = :id').bindparams(id=val)."
+    severity: ERROR
+    metadata:
+      category: security
+      subcategory: sql-injection
+      cwe:
+        - "CWE-89: SQL Injection"
+      owasp:
+        - "A03:2021 - Injection"
+      forge-check-id: SEC-007
+      confidence: HIGH
+      impact: HIGH
+
+  - id: forge.security.sql-injection-js
+    languages: [javascript, typescript]
+    pattern-either:
+      - pattern: $DB.query(`...${$VAR}...`)
+      - pattern: $DB.execute(`...${$VAR}...`)
+      - pattern: $DB.raw(`...${$VAR}...`)
+      - pattern: $POOL.query(`...${$VAR}...`)
+      - pattern: $CONN.query(`...${$VAR}...`)
+    message: "SQL injection via template literal in database query. Use parameterized queries instead."
+    severity: ERROR
+    metadata:
+      category: security
+      subcategory: sql-injection
+      cwe:
+        - "CWE-89: SQL Injection"
+      owasp:
+        - "A03:2021 - Injection"
+      forge-check-id: SEC-008
+      confidence: HIGH
+      impact: HIGH
