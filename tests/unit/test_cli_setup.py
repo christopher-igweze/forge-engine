@@ -57,3 +57,41 @@ class TestCheckApiKeyWithConfig(unittest.TestCase):
                  patch.dict(os.environ, env, clear=True):
                 key = _check_api_key(None)
                 self.assertEqual(key, "sk-or-from-config")
+
+
+class TestSetupCommand(unittest.TestCase):
+
+    @patch("forge.setup_wizard.run_headless_setup")
+    def test_headless_mode_with_api_key(self, mock_headless):
+        mock_headless.return_value = {"success": True, "config_path": "/tmp/config.json", "claude_code": False}
+        from typer.testing import CliRunner
+        from forge.cli import app
+        runner = CliRunner()
+        result = runner.invoke(app, ["setup", "--api-key", "sk-or-test", "--no-interactive"])
+        self.assertEqual(result.exit_code, 0)
+        mock_headless.assert_called_once()
+
+    @patch("forge.setup_wizard.run_headless_setup")
+    def test_headless_json_output(self, mock_headless):
+        mock_headless.return_value = {"success": True, "config_path": "/tmp/config.json", "claude_code": False}
+        from typer.testing import CliRunner
+        from forge.cli import app
+        runner = CliRunner()
+        result = runner.invoke(app, ["setup", "--api-key", "sk-or-test", "--no-interactive", "--json"])
+        self.assertEqual(result.exit_code, 0)
+        data = json.loads(result.output)
+        self.assertTrue(data["success"])
+
+
+class TestFirstRunDetection(unittest.TestCase):
+
+    def test_scan_without_config_or_env_shows_setup_message(self):
+        from typer.testing import CliRunner
+        from forge.cli import app
+        runner = CliRunner()
+        with patch("forge.config_io.CONFIG_PATH", Path("/nonexistent/config.json")), \
+             patch.dict(os.environ, {}, clear=True):
+            os.environ.pop("OPENROUTER_API_KEY", None)
+            result = runner.invoke(app, ["scan", "/tmp"])
+            self.assertIn("setup", result.output.lower())
+            self.assertNotEqual(result.exit_code, 0)

@@ -417,6 +417,56 @@ def auth(
 
 
 @app.command()
+def setup(
+    api_key: str | None = typer.Option(None, "--api-key", "-k", help="OpenRouter API key"),
+    v2p_key: str | None = typer.Option(None, "--v2p-key", help="Vibe2Prod dashboard API key"),
+    no_interactive: bool = typer.Option(False, "--no-interactive", help="Headless mode (no prompts)"),
+    reset: bool = typer.Option(False, "--reset", help="Re-run wizard with existing values pre-populated"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="Output result as JSON"),
+) -> None:
+    """Configure FORGE — API keys, Claude Code integration, dashboard sync.
+
+    Interactive mode (default):
+        vibe2prod setup
+
+    Headless mode (for AI agents):
+        vibe2prod setup --api-key sk-or-... --no-interactive
+
+    Reconfigure:
+        vibe2prod setup --reset
+
+    Example:
+        vibe2prod setup --api-key $OPENROUTER_API_KEY --no-interactive --json
+    """
+    from forge.setup_wizard import run_headless_setup, run_interactive_setup
+
+    # Determine mode: headless if --no-interactive or not a TTY
+    headless = no_interactive or not sys.stdin.isatty()
+
+    if headless:
+        if not api_key:
+            typer.echo("Error: --api-key required in headless mode.", err=True)
+            raise typer.Exit(1)
+        result = run_headless_setup(api_key=api_key, v2p_key=v2p_key)
+    else:
+        # --reset is implicit: interactive mode always pre-populates from existing config.
+        # Running `vibe2prod setup` and `vibe2prod setup --reset` behave the same.
+        result = run_interactive_setup()
+
+    if json_output:
+        typer.echo(json.dumps(result))
+    elif not headless:
+        pass  # TUI already printed everything
+    else:
+        if result.get("success"):
+            typer.echo("Setup complete.")
+        else:
+            typer.echo(f"Setup failed: {result.get('error', 'unknown')}", err=True)
+
+    raise typer.Exit(0 if result.get("success") else 2)
+
+
+@app.command()
 def report(
     path: str = typer.Argument(..., help="Path to the repository"),
     format: str = typer.Option("text", "--format", "-f", help="Output format: text, json, html"),
