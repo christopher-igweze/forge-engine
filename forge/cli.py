@@ -36,7 +36,7 @@ app = typer.Typer(
 config_app = typer.Typer(help="Manage FORGE configuration.")
 app.add_typer(config_app, name="config")
 
-from forge.config_io import load_config as _load_config, save_config as _save_config, CONFIG_PATH
+from forge.config_io import load_config as _load_config, save_config as _save_config, validate_config as _validate_config, CONFIG_PATH
 
 
 @config_app.command("set")
@@ -61,6 +61,9 @@ def config_set(
     current[keys[-1]] = parsed
     _save_config(data)
     typer.echo(f"Set {key} = {parsed}")
+    warnings = _validate_config(data)
+    for w in warnings:
+        typer.echo(f"Warning: {w}", err=True)
 
 
 @config_app.command("get")

@@ -20,6 +20,20 @@ def load_config() -> dict:
     return {}
 
 
+def validate_config(data: dict) -> list[str]:
+    """Validate config dict against known keys. Returns list of warnings."""
+    KNOWN_KEYS = {
+        "openrouter_api_key", "setup_completed", "claude_code_integrated",
+        "data_sharing", "auth", "models", "quality_gate_profile",
+        "evaluation_weights", "opengrep_enabled", "webhook_url",
+    }
+    warnings = []
+    for key in data:
+        if key not in KNOWN_KEYS:
+            warnings.append(f"Unknown config key: '{key}'")
+    return warnings
+
+
 def save_config(data: dict) -> None:
     """Write config atomically with owner-only permissions (0o600)."""
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
