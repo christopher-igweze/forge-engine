@@ -36,18 +36,7 @@ app = typer.Typer(
 config_app = typer.Typer(help="Manage FORGE configuration.")
 app.add_typer(config_app, name="config")
 
-CONFIG_PATH = Path.home() / ".vibe2prod" / "config.json"
-
-
-def _load_config() -> dict:
-    if CONFIG_PATH.exists():
-        return json.loads(CONFIG_PATH.read_text())
-    return {}
-
-
-def _save_config(data: dict) -> None:
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(json.dumps(data, indent=2))
+from forge.config_io import load_config as _load_config, save_config as _save_config, CONFIG_PATH
 
 
 @config_app.command("set")
@@ -100,27 +89,31 @@ def config_get(
 
 
 def _check_api_key(api_key: str | None) -> str:
-    """Resolve the OpenRouter API key from flag or environment."""
+    """Resolve the OpenRouter API key: flag > env > config file."""
     key = api_key or os.getenv("OPENROUTER_API_KEY")
+
+    # Fall back to config file
+    if not key:
+        config = _load_config()
+        key = config.get("openrouter_api_key")
+
     if not key:
         typer.echo(
-            "Error: OPENROUTER_API_KEY is not set.\n"
-            "Set it in your environment or pass --api-key:\n\n"
+            "Error: No API key found.\n"
+            "Run 'vibe2prod setup' to configure, or set OPENROUTER_API_KEY:\n\n"
             "  export OPENROUTER_API_KEY=sk-or-v1-...\n"
             "  vibe2prod scan ./my-app\n",
             err=True,
         )
         raise typer.Exit(1)
-    # Warn on obviously invalid format (OpenRouter keys start with sk-or-)
+
     if not key.startswith("sk-or-"):
         typer.echo(
             "Warning: API key does not match expected OpenRouter format (sk-or-...).\n"
             "If this is intentional, you can ignore this warning.",
             err=True,
         )
-    # Intentional side effect: downstream code (ForgeConfig, AgentAI client,
-    # standalone dispatcher) reads OPENROUTER_API_KEY from the environment.
-    # This avoids threading the key through every function in the call chain.
+
     os.environ["OPENROUTER_API_KEY"] = key
     return key
 
