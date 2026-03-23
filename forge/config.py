@@ -7,7 +7,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+import re
+
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from forge.schemas import ForgeMode
 
@@ -73,6 +75,19 @@ class ForgeConfig(BaseModel):
     webhook_token: str = ""     # HMAC-SHA256 signing secret
     webhook_scan_id: str = ""   # Scan ID included in every event payload
 
+    @field_validator("webhook_url")
+    @classmethod
+    def validate_webhook_url(cls, v: str) -> str:
+        if not v:
+            return v  # Empty is OK (webhook disabled)
+        from urllib.parse import urlparse
+        parsed = urlparse(v)
+        if parsed.scheme not in ("https", "http"):
+            raise ValueError(f"webhook_url must be HTTP(S): {v}")
+        if not parsed.hostname:
+            raise ValueError(f"webhook_url must have a hostname: {v}")
+        return v
+
     # ── Delta Mode ─────────────────────────────────────────────────────
     delta_mode: bool = False  # Only scan files changed since last scan
 
@@ -102,6 +117,7 @@ class ForgeConfig(BaseModel):
         # Apply default override to all fields
         default_model = overrides.get("default")
         if default_model:
+            _validate_model_id(default_model)
             for field in resolved:
                 resolved[field] = default_model
 
@@ -109,6 +125,7 @@ class ForgeConfig(BaseModel):
         for role, model_id in overrides.items():
             if role == "default":
                 continue
+            _validate_model_id(model_id)
             field = FORGE_ROLE_TO_MODEL_FIELD.get(role)
             if field and field in resolved:
                 resolved[field] = model_id
@@ -123,3 +140,9 @@ class ForgeConfig(BaseModel):
     def provider_for_role(self, role: str) -> str:
         """Get the provider name for a specific agent role."""
         return ROLE_TO_PROVIDER.get(role, "openrouter_direct")
+
+
+def _validate_model_id(model_id: str) -> None:
+    """Validate model ID format: provider/model-name."""
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+/[a-zA-Z0-9_.:@-]+", model_id):
+        raise ValueError(f"Invalid model ID format: '{model_id}'. Expected: provider/model-name")
