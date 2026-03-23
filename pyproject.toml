@@ -19,6 +19,7 @@ dependencies = [
     "networkx>=3.0",
     "mcp>=1.0",
     "pyyaml>=6.0",
+    "rich>=13.0",
 ]
 
 [project.optional-dependencies]
@@ -36,6 +37,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["forge*"]
+
+[tool.setuptools.package-data]
+forge = ["skills/forge/SKILL.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
