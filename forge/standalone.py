@@ -240,7 +240,10 @@ async def run_standalone(
         state._v3_evaluation = result.get("evaluation")
 
         # Triage
-        result = await _run_triage(dispatcher, state, cfg, resolved, tier1_findings)
+        result = await _run_triage(
+            dispatcher, state, cfg, resolved, tier1_findings,
+            evaluation_result=state._v3_evaluation,
+        )
         state.total_agent_invocations += result["invocations"]
 
         state.success = True

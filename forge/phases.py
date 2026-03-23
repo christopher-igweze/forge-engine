@@ -532,6 +532,7 @@ async def _run_triage(
     resolved_models: dict[str, str],
     tier1_findings: list[dict] | None = None,
     convergence_context: str = "",
+    evaluation_result: dict | None = None,
 ) -> dict:
     """Run Triage phase: Agents 5-6.
 
@@ -635,6 +636,62 @@ async def _run_triage(
             logger.info(
                 "Safety net: added %d dropped Tier 2/3 findings back to plan (total: %d)",
                 added, state.remediation_plan.total_items,
+            )
+
+    # Merge deterministic check remediation items into the plan
+    if evaluation_result and state.remediation_plan:
+        try:
+            from forge.evaluation.remediation_items import generate_check_remediation_items
+
+            det_checks = evaluation_result.get("deterministic_checks", {})
+            if isinstance(det_checks, dict):
+                failed_checks_data = det_checks.get("failed_checks", [])
+            else:
+                failed_checks_data = []
+
+            if failed_checks_data:
+                from forge.evaluation.checks import CheckResult
+
+                check_results = [
+                    CheckResult(
+                        check_id=c["check_id"],
+                        name=c["name"],
+                        passed=False,
+                        severity=c.get("severity", "medium"),
+                        deduction=c.get("deduction", 0),
+                        locations=c.get("locations", []),
+                        details=c.get("details", ""),
+                    )
+                    for c in failed_checks_data
+                ]
+                det_items = generate_check_remediation_items(check_results)
+                if det_items:
+                    existing_ids = {item.finding_id for item in state.remediation_plan.items}
+                    from forge.schemas import RemediationItem, RemediationTier
+
+                    added = 0
+                    new_det_ids = []
+                    for item_dict in det_items:
+                        if item_dict["finding_id"] not in existing_ids:
+                            item_dict["tier"] = RemediationTier.TIER_1
+                            state.remediation_plan.items.append(
+                                RemediationItem(**item_dict)
+                            )
+                            new_det_ids.append(item_dict["finding_id"])
+                            added += 1
+
+                    if added:
+                        state.remediation_plan.total_items = len(
+                            state.remediation_plan.items
+                        )
+                        state.remediation_plan.execution_levels.append(new_det_ids)
+                        logger.info(
+                            "Added %d deterministic check remediation items to plan",
+                            added,
+                        )
+        except Exception as e:
+            logger.warning(
+                "Failed to merge deterministic check items (non-fatal): %s", e
             )
 
     # Write tier assignments back to the finding objects so reports show them
