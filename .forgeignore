@@ -52,3 +52,14 @@
 - pattern: "User input to subprocess"
   path: "setup_wizard.py"
   reason: "False positive: code uses list-form subprocess.run() which is immune to shell injection. The auditor's own suggested fix confirms this."
+
+# SQL injection false positive — no SQL database in this codebase (F-822bffaa)
+- id: "F-822bffaa"
+  pattern: "SQL injection"
+  reason: "False positive: FORGE is an LLM orchestration tool with no SQL database. All data is file-based JSON."
+
+# Debug mode is intentional CLI --verbose flag, not a web server debug mode (F-9b54a196)
+- id: "F-9b54a196"
+  pattern: "Debug mode"
+  path: "forge/cli.py"
+  reason: "False positive: CLI tool uses --verbose flag for debug logging, not a web server debug mode. This is intentional and expected."
