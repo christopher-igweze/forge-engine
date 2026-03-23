@@ -82,6 +82,9 @@ class ForgeConfig(BaseModel):
             return v  # Empty is OK (webhook disabled)
         from urllib.parse import urlparse
         parsed = urlparse(v)
+        # Allow HTTP only for localhost (development)
+        if parsed.scheme == "http" and parsed.hostname not in ("localhost", "127.0.0.1"):
+            raise ValueError(f"webhook_url must use HTTPS for non-localhost: {v}")
         if parsed.scheme not in ("https", "http"):
             raise ValueError(f"webhook_url must be HTTP(S): {v}")
         if not parsed.hostname:
