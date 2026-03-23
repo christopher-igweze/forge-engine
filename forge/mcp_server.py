@@ -26,6 +26,12 @@ from mcp.server.fastmcp import FastMCP
 
 logger = logging.getLogger(__name__)
 
+# Warn if TLS verification bypass is detected
+_TLS_BYPASS_VARS = ("PYTHONHTTPSVERIFY", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE")
+for _var in _TLS_BYPASS_VARS:
+    if os.getenv(_var):
+        logger.warning("TLS bypass environment variable detected: %s — this may disable certificate verification", _var)
+
 _VIBE2PROD_URL = os.environ.get("VIBE2PROD_URL", "https://api.vibe2prod.net")
 _VIBE2PROD_API_KEY = os.environ.get("VIBE2PROD_API_KEY", "")
 
@@ -81,7 +87,7 @@ async def _send_telemetry(event: str, data: dict) -> None:
             headers["X-API-Key"] = _VIBE2PROD_API_KEY
 
         payload = {"event": event, "machine_id": _machine_id(), **data}
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=5.0, verify=True) as client:
             await client.post(
                 f"{_VIBE2PROD_URL}/api/telemetry",
                 json=payload,
@@ -110,7 +116,7 @@ async def _sync_scan_to_dashboard(
         repo_url = _detect_git_remote(repo_path)
         repo_name = Path(repo_path).name
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, verify=True) as client:
             await client.post(
                 f"{_VIBE2PROD_URL}/api/cli/scan-report",
                 json={
