@@ -19,6 +19,8 @@ env/
 .forge-worktrees/
 .forge-checkpoints/
 .forge-benchmarks/
+.forge-artifacts/
+.mcp.json
 
 # Golden test codebases — generated at test time, not committed
 # (except the 4 small tracked fixtures used by test_golden_suite.py)
