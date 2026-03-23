@@ -100,11 +100,26 @@ def _resolve_repo_path(repo_url: str, repo_path: str) -> str:
     if repo_url:
         import re
         import subprocess
+        from urllib.parse import urlparse
+
+        # Validate URL scheme
+        parsed = urlparse(repo_url)
+        if parsed.scheme not in ("https", "http", "ssh", "git") and not repo_url.startswith("git@"):
+            raise ValueError(f"Invalid repo URL scheme: {repo_url}")
 
         match = re.search(r"/([^/]+?)(?:\.git)?$", repo_url.rstrip("/"))
         name = match.group(1) if match else "repo"
+
+        # Validate repo name — alphanumeric, dash, underscore, dot only
+        if not re.fullmatch(r"[a-zA-Z0-9._-]+", name):
+            raise ValueError(f"Invalid repo name extracted from URL: {name}")
+
         workspaces = os.getenv("WORKSPACES_DIR", "/tmp/vibe2prod-workspaces")
-        workspace = os.path.join(workspaces, name)
+        workspace = str((Path(workspaces) / name).resolve())
+
+        # Path traversal check
+        if not workspace.startswith(str(Path(workspaces).resolve())):
+            raise ValueError(f"Path traversal detected in workspace: {workspace}")
 
         if Path(workspace).is_dir():
             logger.info("Reusing existing workspace: %s", workspace)
