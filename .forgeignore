@@ -42,3 +42,13 @@
   path: "tests/**"
   category: security
   reason: "Test fixtures contain intentional secrets/vulnerabilities for validation"
+
+# Setup wizard is a local CLI tool — no debug mode to disable (CWE-489)
+- pattern: "Debug mode enablement"
+  path: "setup_wizard.py"
+  reason: "False positive: setup_wizard.py is a local CLI tool, not a web server. There is no debug mode to disable."
+
+# subprocess.run() with list-form args is safe from shell injection (CWE-78)
+- pattern: "User input to subprocess"
+  path: "setup_wizard.py"
+  reason: "False positive: code uses list-form subprocess.run() which is immune to shell injection. The auditor's own suggested fix confirms this."
