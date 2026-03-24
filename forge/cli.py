@@ -137,17 +137,29 @@ def _setup_logging(verbose: bool) -> None:
 
 def _resolve_path(path: str) -> str:
     """Resolve and validate the repo path."""
-    resolved = str(Path(path).resolve())
-    if not Path(resolved).is_dir():
+    import tempfile
+
+    resolved = Path(path).resolve()
+    if not resolved.is_dir():
         typer.echo(f"Error: '{path}' is not a directory.", err=True)
         raise typer.Exit(1)
-    if not Path(resolved, ".git").exists():
+    # Reject paths outside user's home, cwd, or temp directory as a safety measure
+    cwd = Path.cwd().resolve()
+    home = Path.home().resolve()
+    tmp = Path(tempfile.gettempdir()).resolve()
+    resolved_str = str(resolved)
+    if not (resolved_str.startswith(str(cwd))
+            or resolved_str.startswith(str(home))
+            or resolved_str.startswith(str(tmp))):
+        typer.echo(f"Error: '{path}' is outside allowed directories.", err=True)
+        raise typer.Exit(1)
+    if not (resolved / ".git").exists():
         typer.echo(
             f"Warning: '{path}' is not a git repository. "
             "Some features (worktree isolation, PR creation) won't work.",
             err=True,
         )
-    return resolved
+    return str(resolved)
 
 
 def _print_summary(result) -> None:
