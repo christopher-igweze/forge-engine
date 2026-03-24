@@ -39,6 +39,7 @@ def _check_tst001(repo_path: str) -> CheckResult:
         severity="critical",
         deduction=0 if passed else -40,
         details=f"Found {len(test_files)} test file(s)." if passed else "No test files found.",
+        fix_guidance="Create test files with pytest (Python) or jest (JS/TS) covering core business logic." if not passed else "",
     )
 
 
@@ -76,6 +77,7 @@ def _check_tst002(repo_path: str) -> CheckResult:
         severity="medium",
         deduction=0 if passed else -10,
         details="" if passed else "Missing unit and/or integration test separation.",
+        fix_guidance="Add integration tests alongside unit tests to cover API endpoints and external service interactions." if not passed else "",
     )
 
 
@@ -112,8 +114,9 @@ def _check_tst003(repo_path: str) -> CheckResult:
         passed=passed,
         severity="medium",
         deduction=0 if passed else deduction,
-        locations=locations,
+        locations=locations[:5],
         details=f"{len(locations)} test function(s) with no assertions." if locations else "",
+        fix_guidance="Add assert/expect statements to each test function to verify specific behavior." if not passed else "",
     )
 
 
@@ -163,8 +166,9 @@ def _check_tst004(repo_path: str) -> CheckResult:
         passed=passed,
         severity="high",
         deduction=0 if passed else -10,
-        locations=missing,
+        locations=missing[:5],
         details=f"{len(missing)} critical source file(s) lack test coverage." if missing else "",
+        fix_guidance="Add dedicated tests for auth, payment, and core business workflow modules." if not passed else "",
     )
 
 
@@ -192,6 +196,7 @@ def _check_tst005(repo_path: str) -> CheckResult:
         severity="medium",
         deduction=0 if passed else -5,
         details=f"Test-to-source ratio: {ratio:.2f} ({test_count} tests / {source_count} sources).",
+        fix_guidance="Add tests for untested modules to reach at least a 0.3 test-to-source file ratio." if not passed else "",
     )
 
 
@@ -243,12 +248,15 @@ def _check_tst006(repo_path: str) -> CheckResult:
         severity="low",
         deduction=-3,
         details="No pytest.ini, jest.config, pyproject.toml [tool.pytest], or equivalent found.",
+        fix_guidance="Add a test configuration file (pytest.ini, jest.config.js) to standardize test discovery and settings.",
     )
 
 
 def _check_tst007(repo_path: str) -> CheckResult:
     """TST-007: Low coverage threshold (<60%)."""
     repo = Path(repo_path)
+
+    _tst007_fix = "Set a minimum coverage threshold (>=60%) in test configuration and add coverage reporting to CI."
 
     # Check pyproject.toml
     pyproject = repo / "pyproject.toml"
@@ -265,6 +273,7 @@ def _check_tst007(repo_path: str) -> CheckResult:
                 severity="medium",
                 deduction=0 if passed else -5,
                 details=f"Coverage threshold: {threshold}%.",
+                fix_guidance="" if passed else _tst007_fix,
             )
 
     # Check pytest.ini
@@ -282,6 +291,7 @@ def _check_tst007(repo_path: str) -> CheckResult:
                 severity="medium",
                 deduction=0 if passed else -5,
                 details=f"Coverage threshold: {threshold}%.",
+                fix_guidance="" if passed else _tst007_fix,
             )
 
     # Check jest config for coverageThreshold
@@ -300,6 +310,7 @@ def _check_tst007(repo_path: str) -> CheckResult:
                     severity="medium",
                     deduction=0 if passed else -5,
                     details=f"Coverage threshold: {threshold}%.",
+                    fix_guidance="" if passed else _tst007_fix,
                 )
 
     # No coverage threshold configured at all
@@ -310,6 +321,7 @@ def _check_tst007(repo_path: str) -> CheckResult:
         severity="medium",
         deduction=-5,
         details="No coverage threshold configured.",
+        fix_guidance=_tst007_fix,
     )
 
 

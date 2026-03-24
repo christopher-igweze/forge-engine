@@ -82,8 +82,9 @@ def _check_rel001(repo_path: str) -> CheckResult:
         passed=passed,
         severity="high",
         deduction=0 if passed else -15,
-        locations=locations,
+        locations=locations[:5],
         details=f"{len(locations)} route handler(s) lack error handling." if locations else "",
+        fix_guidance="Add try/except blocks to route handlers and return structured error responses." if not passed else "",
     )
 
 
@@ -106,6 +107,7 @@ def _check_rel002(repo_path: str) -> CheckResult:
         severity="high",
         deduction=-10,
         details="No /health, /healthz, /ready, /liveness, or /readiness endpoint found.",
+        fix_guidance="Add a /health endpoint that returns 200 OK and checks key dependencies.",
     )
 
 
@@ -128,6 +130,7 @@ def _check_rel003(repo_path: str) -> CheckResult:
         severity="medium",
         deduction=-8,
         details="No signal handler, atexit, lifespan, or on_shutdown found.",
+        fix_guidance="Register a SIGTERM handler or use a lifespan/on_shutdown hook to finish in-flight requests before exiting.",
     )
 
 
@@ -163,8 +166,9 @@ def _check_rel004(repo_path: str) -> CheckResult:
         passed=passed,
         severity="medium",
         deduction=0 if passed else -8,
-        locations=locations,
+        locations=locations[:5],
         details=f"{len(locations)} silent except block(s) found." if locations else "",
+        fix_guidance="Replace bare 'except: pass' with specific exception handling and log the error." if not passed else "",
     )
 
 
@@ -191,8 +195,9 @@ def _check_rel005(repo_path: str) -> CheckResult:
         passed=passed,
         severity="medium",
         deduction=0 if passed else -5,
-        locations=locations,
+        locations=locations[:5],
         details=f"{len(locations)} HTTP call(s) without timeout." if locations else "",
+        fix_guidance="Add timeout= parameter to all HTTP client calls (e.g., requests.get(..., timeout=10))." if not passed else "",
     )
 
 
@@ -215,6 +220,7 @@ def _check_rel006(repo_path: str) -> CheckResult:
         severity="low",
         deduction=-3,
         details="No retry/backoff/tenacity patterns found in source.",
+        fix_guidance="Add retry logic with exponential backoff to external API calls using tenacity or a retry decorator.",
     )
 
 
@@ -240,8 +246,9 @@ def _check_rel007(repo_path: str) -> CheckResult:
         passed=passed,
         severity="low",
         deduction=0 if passed else -3,
-        locations=locations,
+        locations=locations[:5],
         details=f"{len(locations)} DB connection(s) without pool config." if locations else "",
+        fix_guidance="Configure connection pooling with pool_size, max_overflow, and pool_recycle parameters." if not passed else "",
     )
 
 

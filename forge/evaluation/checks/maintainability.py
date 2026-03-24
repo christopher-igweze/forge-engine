@@ -43,8 +43,9 @@ def _check_mnt001(repo_path: str) -> CheckResult:
         passed=passed,
         severity="high",
         deduction=0 if passed else deduction,
-        locations=locations,
+        locations=locations[:5],
         details=f"{len(locations)} class(es) exceed 500 lines." if locations else "",
+        fix_guidance="Split large classes into smaller, focused classes using composition and single responsibility." if not passed else "",
     )
 
 
@@ -93,8 +94,9 @@ def _check_mnt002(repo_path: str) -> CheckResult:
         passed=passed,
         severity="medium",
         deduction=0 if passed else deduction,
-        locations=locations,
+        locations=locations[:5],
         details=f"{len(locations)} function(s) exceed complexity threshold of 20." if locations else "",
+        fix_guidance="Extract helper functions, use early returns, and simplify conditional logic to reduce complexity." if not passed else "",
     )
 
 
@@ -139,8 +141,9 @@ def _check_mnt003(repo_path: str) -> CheckResult:
         passed=passed,
         severity="medium",
         deduction=0 if passed else deduction,
-        locations=locations,
+        locations=locations[:5],
         details=f"{len(locations)} function(s) exceed 4 levels of nesting." if locations else "",
+        fix_guidance="Use guard clauses (early returns), extract inner blocks into functions, or invert conditions." if not passed else "",
     )
 
 
@@ -189,8 +192,9 @@ def _check_mnt004(repo_path: str) -> CheckResult:
         passed=passed,
         severity="medium",
         deduction=0 if passed else deduction,
-        locations=locations,
+        locations=locations[:5],
         details=f"{len(locations)} duplicate block pair(s) found (>{BLOCK_SIZE} lines)." if locations else "",
+        fix_guidance="Extract duplicated code blocks into shared functions or modules." if not passed else "",
     )
 
 
@@ -262,8 +266,9 @@ def _check_mnt005(repo_path: str) -> CheckResult:
         passed=passed,
         severity="medium",
         deduction=0 if passed else deduction,
-        locations=locations,
+        locations=locations[:5],
         details=f"{len(locations)} circular import cycle(s) detected." if locations else "",
+        fix_guidance="Break cycles by extracting shared types into a separate module or using dependency injection." if not passed else "",
     )
 
 

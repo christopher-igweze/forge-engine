@@ -63,6 +63,7 @@ def _check_ops001(repo_path: str) -> CheckResult:
         severity="high",
         deduction=-25,
         details="No .github/workflows, .gitlab-ci.yml, Jenkinsfile, or equivalent found.",
+        fix_guidance="Add CI/CD configuration (.github/workflows/) with lint, test, and build steps.",
     )
 
 
@@ -85,6 +86,7 @@ def _check_ops002(repo_path: str) -> CheckResult:
         severity="medium",
         deduction=-10,
         details="No Dockerfile or docker-compose.yml found.",
+        fix_guidance="Create a Dockerfile with a multi-stage build for a production-ready container image.",
     )
 
 
@@ -126,8 +128,9 @@ def _check_ops003(repo_path: str) -> CheckResult:
         passed=passed,
         severity="medium",
         deduction=0 if passed else -10,
-        locations=print_locations if not passed else [],
+        locations=print_locations[:5] if not passed else [],
         details=f"{print_count} raw print() call(s) without structured logging." if not passed else "",
+        fix_guidance="Replace print() with structured logging (logging module, structlog) using appropriate log levels." if not passed else "",
     )
 
 
@@ -154,8 +157,9 @@ def _check_ops004(repo_path: str) -> CheckResult:
         passed=passed,
         severity="medium",
         deduction=0 if passed else deduction,
-        locations=locations,
+        locations=locations[:5],
         details=f"{len(locations)} env access(es) without validation." if locations else "",
+        fix_guidance="Validate environment variables at startup using Pydantic Settings or manual checks with clear error messages." if not passed else "",
     )
 
 
@@ -178,6 +182,7 @@ def _check_ops005(repo_path: str) -> CheckResult:
         severity="low",
         deduction=-5,
         details="No .env.example, .env.sample, or .env.template found.",
+        fix_guidance="Create a .env.example documenting all required environment variables with descriptions and example values.",
     )
 
 
@@ -221,6 +226,7 @@ def _check_ops006(repo_path: str) -> CheckResult:
         severity="low",
         deduction=-5,
         details="No linter configuration found.",
+        fix_guidance="Add linter configuration (ruff.toml, .eslintrc, or pyproject.toml [tool.ruff]) with sensible defaults.",
     )
 
 

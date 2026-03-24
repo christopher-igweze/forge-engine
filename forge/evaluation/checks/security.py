@@ -131,10 +131,11 @@ def _check_sec001(repo_path: str) -> CheckResult:
         passed=passed,
         severity="critical",
         deduction=0 if passed else -20,
-        locations=locations,
+        locations=locations[:5],
         details=f"Found {len(locations)} potential hardcoded secret(s)." if locations else "",
         stride="information_disclosure",
         asvs_ref="V13.1.3",
+        fix_guidance="Move secrets to environment variables or a secrets manager and rotate any exposed credentials." if not passed else "",
     )
 
 
@@ -157,10 +158,11 @@ def _check_sec002(repo_path: str) -> CheckResult:
         passed=passed,
         severity="critical",
         deduction=0 if passed else -15,
-        locations=locations,
+        locations=locations[:5],
         details=f"Found {len(locations)} SQL injection risk(s)." if locations else "",
         stride="tampering",
         asvs_ref="V1.5.3",
+        fix_guidance="Replace string concatenation with parameterized queries or ORM methods." if not passed else "",
     )
 
 
@@ -209,10 +211,11 @@ def _check_sec003(repo_path: str) -> CheckResult:
         passed=passed,
         severity="critical",
         deduction=0 if passed else -15,
-        locations=locations,
+        locations=locations[:5],
         details=f"Found {len(locations)} command injection risk(s)." if locations else "",
         stride="elevation_of_privilege",
         asvs_ref="",
+        fix_guidance="Use subprocess.run() with list arguments instead of shell=True, and validate all user inputs." if not passed else "",
     )
 
 
@@ -246,10 +249,11 @@ def _check_sec004(repo_path: str) -> CheckResult:
         passed=passed,
         severity="high",
         deduction=0 if passed else -10,
-        locations=locations if not passed else [],
+        locations=locations[:5] if not passed else [],
         details=f"{unprotected}/{total_routes} routes lack auth." if not passed else "",
         stride="spoofing",
         asvs_ref="V6.2.1",
+        fix_guidance="Add authentication middleware or Depends() to all non-public route handlers." if not passed else "",
     )
 
 
@@ -279,10 +283,11 @@ def _check_sec005(repo_path: str) -> CheckResult:
         passed=passed,
         severity="high",
         deduction=0 if passed else -10,
-        locations=locations,
+        locations=locations[:5],
         details=f"Found {len(locations)} insecure crypto usage(s)." if locations else "",
         stride="information_disclosure",
         asvs_ref="V11.1.1",
+        fix_guidance="Replace MD5/SHA1 with bcrypt, scrypt, or Argon2 for password hashing." if not passed else "",
     )
 
 
@@ -311,10 +316,11 @@ def _check_sec006(repo_path: str) -> CheckResult:
         passed=passed,
         severity="high",
         deduction=0 if passed else -8,
-        locations=locations,
+        locations=locations[:5],
         details=f"Found {len(locations)} debug mode flag(s) in config." if locations else "",
         stride="information_disclosure",
         asvs_ref="V13.4.1",
+        fix_guidance="Set DEBUG=False in production config and control via environment variables." if not passed else "",
     )
 
 
@@ -337,10 +343,11 @@ def _check_sec007(repo_path: str) -> CheckResult:
         passed=passed,
         severity="high",
         deduction=0 if passed else -8,
-        locations=locations,
+        locations=locations[:5],
         details=f"Found {len(locations)} CORS wildcard origin(s)." if locations else "",
         stride="spoofing",
         asvs_ref="",
+        fix_guidance="Replace CORS wildcard '*' with specific allowed origins." if not passed else "",
     )
 
 
@@ -379,10 +386,11 @@ def _check_sec008(repo_path: str) -> CheckResult:
         passed=passed,
         severity="medium",
         deduction=0 if passed else -5,
-        locations=locations,
+        locations=locations[:5],
         details=f"Found {len(locations)} hardcoded HTTP URL(s)." if locations else "",
         stride="",
         asvs_ref="",
+        fix_guidance="Replace hardcoded http:// URLs with https:// and configure TLS at the load balancer." if not passed else "",
     )
 
 
@@ -409,10 +417,11 @@ def _check_sec009(repo_path: str) -> CheckResult:
         passed=passed,
         severity="medium",
         deduction=0 if passed else -5,
-        locations=locations,
+        locations=locations[:5],
         details=f"Found {len(locations)} verbose error exposure(s)." if locations else "",
         stride="information_disclosure",
         asvs_ref="V1.7.2",
+        fix_guidance="Return generic error messages to clients and log detailed errors server-side only." if not passed else "",
     )
 
 
@@ -442,10 +451,11 @@ def _check_sec010(repo_path: str) -> CheckResult:
         passed=passed,
         severity="medium",
         deduction=0 if passed else -5,
-        locations=locations,
+        locations=locations[:5],
         details=f"Found {len(locations)} PII logging risk(s)." if locations else "",
         stride="information_disclosure",
         asvs_ref="V14.3.3",
+        fix_guidance="Remove sensitive data from log statements and use structured logging with field redaction." if not passed else "",
     )
 
 
@@ -478,10 +488,11 @@ def _check_sec011(repo_path: str) -> CheckResult:
         passed=passed,
         severity="medium",
         deduction=0 if passed else -3,
-        locations=locations,
+        locations=locations[:5],
         details=f"Found {len(locations)} route(s) without input validation." if locations else "",
         stride="tampering",
         asvs_ref="",
+        fix_guidance="Add Pydantic models or framework validators to all route parameters and request bodies." if not passed else "",
     )
 
 
@@ -504,10 +515,11 @@ def _check_sec012(repo_path: str) -> CheckResult:
         passed=passed,
         severity="medium",
         deduction=0 if passed else -3,
-        locations=locations,
+        locations=locations[:5],
         details=f"Found {len(locations)} insecure default(s)." if locations else "",
         stride="",
         asvs_ref="V13.4.2",
+        fix_guidance="Replace insecure default credentials with configuration that requires explicit setup." if not passed else "",
     )
 
 

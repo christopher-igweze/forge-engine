@@ -33,6 +33,7 @@ def _check_doc001(repo_path: str) -> CheckResult:
         severity="high",
         deduction=-30,
         details="No README.md, README.rst, or README.txt found.",
+        fix_guidance="Create a README.md with project description, setup instructions, and usage examples.",
     )
 
 
@@ -51,7 +52,9 @@ def _check_doc002(repo_path: str) -> CheckResult:
                 passed=passed,
                 severity="medium",
                 deduction=0 if passed else -15,
+                locations=[{"file": str(p), "line": 1}] if not passed else [],
                 details=f"README has {len(non_empty)} non-empty lines." if not passed else "",
+                fix_guidance="Expand README to cover installation, usage, and contribution guidelines (>=10 substantive lines)." if not passed else "",
             )
     # No README at all — DOC-001 covers this
     return CheckResult(
@@ -122,6 +125,7 @@ def _check_doc003(repo_path: str) -> CheckResult:
         severity="medium",
         deduction=0 if has_docs else -10,
         details="" if has_docs else "API routes found but no OpenAPI/Swagger docs.",
+        fix_guidance="Add API documentation using OpenAPI/Swagger auto-generated from route definitions." if not has_docs else "",
     )
 
 
@@ -168,6 +172,7 @@ def _check_doc004(repo_path: str) -> CheckResult:
         severity="medium",
         deduction=0 if passed else -10,
         details=f"{undocumented}/{total_public} ({ratio:.0%}) public functions lack docstrings.",
+        fix_guidance="Add docstrings to public functions with parameter descriptions and return types." if not passed else "",
     )
 
 
@@ -190,6 +195,7 @@ def _check_doc005(repo_path: str) -> CheckResult:
         severity="low",
         deduction=-5,
         details="No docs/adr/, docs/decisions/, or equivalent directory found.",
+        fix_guidance="Create a docs/adr/ directory with at least one Architecture Decision Record.",
     )
 
 
@@ -212,6 +218,7 @@ def _check_doc006(repo_path: str) -> CheckResult:
         severity="low",
         deduction=-3,
         details="No CHANGELOG.md, CHANGES.md, or HISTORY.md found.",
+        fix_guidance="Create a CHANGELOG.md using Keep a Changelog format with Added, Changed, Fixed sections.",
     )
 
 

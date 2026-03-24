@@ -91,8 +91,9 @@ def _check_prf001(repo_path: str) -> CheckResult:
         passed=passed,
         severity="high",
         deduction=0 if passed else deduction,
-        locations=locations,
+        locations=locations[:5],
         details=f"{len(locations)} potential N+1 query pattern(s)." if locations else "",
+        fix_guidance="Replace DB calls inside loops with batch queries, JOINs, or eager loading." if not passed else "",
     )
 
 
@@ -119,8 +120,9 @@ def _check_prf002(repo_path: str) -> CheckResult:
         passed=passed,
         severity="medium",
         deduction=0 if passed else deduction,
-        locations=locations,
+        locations=locations[:5],
         details=f"{len(locations)} unbounded query/queries." if locations else "",
+        fix_guidance="Add LIMIT clauses to queries and use pagination for list endpoints." if not passed else "",
     )
 
 
@@ -150,8 +152,9 @@ def _check_prf003(repo_path: str) -> CheckResult:
         passed=passed,
         severity="medium",
         deduction=0 if passed else deduction,
-        locations=locations,
+        locations=locations[:5],
         details=f"{len(locations)} list endpoint(s) without pagination." if locations else "",
+        fix_guidance="Add offset/limit or cursor-based pagination parameters to list API endpoints." if not passed else "",
     )
 
 
@@ -186,8 +189,9 @@ def _check_prf004(repo_path: str) -> CheckResult:
         passed=passed,
         severity="medium",
         deduction=0 if passed else deduction,
-        locations=locations,
+        locations=locations[:5],
         details=f"{len(locations)} async function(s) with sync I/O." if locations else "",
+        fix_guidance="Replace blocking calls in async functions with async equivalents (httpx, asyncio.sleep, aiofiles)." if not passed else "",
     )
 
 
@@ -210,6 +214,7 @@ def _check_prf005(repo_path: str) -> CheckResult:
         severity="low",
         deduction=-3,
         details="No caching mechanism (lru_cache, Redis, memcache, etc.) found.",
+        fix_guidance="Add caching (functools.lru_cache, Redis, or framework caching) for expensive operations.",
     )
 
 
