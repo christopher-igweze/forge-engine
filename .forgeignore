@@ -63,3 +63,74 @@
   pattern: "Debug mode"
   path: "forge/cli.py"
   reason: "False positive: CLI tool uses --verbose flag for debug logging, not a web server debug mode. This is intentional and expected."
+
+# SEC-001: remediation_items.py contains the string "hardcoded secrets" as check name/template text
+- check_id: "SEC-001"
+  path: "forge/**/remediation_items.py"
+  reason: "Template text referencing 'hardcoded secrets' as a check name, not actual secrets."
+
+# SEC-005: maintainability.py has regex patterns for detecting insecure crypto in user code
+- check_id: "SEC-005"
+  path: "forge/**/maintainability.py"
+  reason: "Regex patterns that detect insecure crypto in scanned code, not actual insecure crypto usage."
+
+# SEC-008: security.py references HTTPS patterns it detects, not missing HTTPS in FORGE
+- check_id: "SEC-008"
+  path: "forge/**/security.py"
+  reason: "Security check definitions reference HTTPS patterns they detect, not missing HTTPS in FORGE itself."
+
+# SEC-009: FORGE is a CLI tool — MCP server returns structured JSON, standalone is internal
+- check_id: "SEC-009"
+  path: "forge/mcp_server.py"
+  reason: "MCP server returns structured JSON error responses, not raw exceptions. CLI tool, not a web service."
+
+- check_id: "SEC-009"
+  path: "forge/standalone.py"
+  reason: "Internal module used by CLI and MCP server. Errors are caught and wrapped in structured responses."
+
+# SEC-010: Masked key display is intentional UX, not PII leakage
+- check_id: "SEC-010"
+  path: "forge/setup_wizard.py"
+  reason: "Masked key display (api_key[:6] + '****') is intentional UX for user confirmation, not PII leakage."
+
+# SEC-012: remediation_items.py contains template text about insecure defaults as guidance
+- check_id: "SEC-012"
+  path: "forge/**/remediation_items.py"
+  reason: "Template text about 'insecure defaults' as remediation guidance for scanned code, not actual insecure defaults."
+
+# REL-002: FORGE is a CLI tool and MCP server, not a web service
+- check_id: "REL-002"
+  pattern: "No health check endpoint"
+  reason: "FORGE is a CLI tool and MCP server, not a long-running web service. No health endpoint needed."
+
+# PRF-001: FORGE has no database — for loops near function calls are not N+1 queries
+- check_id: "PRF-001"
+  path: "forge/cli.py"
+  reason: "No database in FORGE. Check incorrectly flags for loops near function calls as N+1 query patterns."
+
+# PRF-002: No database queries in these files — pattern matching false positive
+- check_id: "PRF-002"
+  path: "forge/**/report_dependency_graph.py"
+  reason: "No database queries exist. Graph traversal code is misidentified as unindexed DB queries."
+
+- check_id: "PRF-002"
+  path: "forge/**/context.py"
+  reason: "No database queries exist. Pattern context code is misidentified as unindexed DB queries."
+
+- check_id: "PRF-002"
+  path: "forge/**/worker_utils.py"
+  reason: "No database queries exist. Swarm worker utilities are misidentified as unindexed DB queries."
+
+# OPS-001: CI/CD is in the parent vibe2prod repo via GitHub Actions
+- check_id: "OPS-001"
+  pattern: "No CI/CD"
+  reason: "FORGE uses GitHub Actions for CI/CD via the parent vibe2prod repo. The forge-engine repo itself doesn't need its own CI config."
+
+# Config key storage: keys stored with 0o600 permissions. Keyring integration planned for v2.
+- pattern: "plaintext.*API key|API key.*plaintext|encrypt.*key.*at rest"
+  path: "forge/setup_wizard.py"
+  reason: "Keys are stored with 0o600 permissions. System keyring integration planned for v2. Environment variable override is documented as the secure alternative."
+
+- pattern: "hardcoded.*API key.*env|API key.*hardcoded.*fallback"
+  path: "forge/cli.py"
+  reason: "The code reads keys from env vars or config file — it does not hardcode keys. The finding misidentifies the key resolution cascade as hardcoding."
