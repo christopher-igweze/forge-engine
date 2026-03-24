@@ -94,8 +94,8 @@ async def _send_telemetry(event: str, data: dict) -> None:
             )
     except httpx.ConnectError as e:
         logger.debug("Telemetry connection failed: %s", e)
-    except Exception:
-        pass  # Never fail on telemetry
+    except Exception as e:
+        logger.debug("Telemetry send failed (non-fatal): %s", e)
 
 
 async def _sync_scan_to_dashboard(
@@ -134,8 +134,8 @@ async def _sync_scan_to_dashboard(
             )
     except httpx.ConnectError as e:
         logger.debug("Dashboard sync connection failed: %s", e)
-    except Exception:
-        pass  # Never fail on dashboard sync
+    except Exception as e:
+        logger.debug("Dashboard sync failed (non-fatal): %s", e)
 
 
 @mcp.tool()

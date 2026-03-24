@@ -92,6 +92,66 @@ def _get_run_telemetry():
         return None
 
 
+def _merge_opengrep_findings(
+    state: ForgeExecutionState,
+    opengrep_findings: list[dict],
+) -> None:
+    """Merge Opengrep deterministic findings into state.all_findings."""
+    from forge.schemas import FindingCategory, FindingLocation
+
+    _CAT_MAP = {
+        "security": FindingCategory.SECURITY,
+        "quality": FindingCategory.QUALITY,
+        "performance": FindingCategory.PERFORMANCE,
+        "reliability": FindingCategory.RELIABILITY,
+        "architecture": FindingCategory.ARCHITECTURE,
+    }
+    _SEV_MAP = {
+        "critical": FindingSeverity.CRITICAL,
+        "high": FindingSeverity.HIGH,
+        "medium": FindingSeverity.MEDIUM,
+        "low": FindingSeverity.LOW,
+        "info": FindingSeverity.INFO,
+    }
+
+    for og_dict in opengrep_findings:
+        try:
+            cat = _CAT_MAP.get(og_dict.get("category", "security"), FindingCategory.SECURITY)
+            sev = _SEV_MAP.get(og_dict.get("severity", "medium"), FindingSeverity.MEDIUM)
+            locs = [
+                FindingLocation(
+                    file_path=loc.get("file_path", ""),
+                    line_start=loc.get("line_start"),
+                    line_end=loc.get("line_end"),
+                    snippet=loc.get("snippet", ""),
+                )
+                for loc in og_dict.get("locations", [])
+            ]
+            af = AuditFinding(
+                title=og_dict.get("title", ""),
+                description=og_dict.get("description", ""),
+                category=cat,
+                severity=sev,
+                locations=locs,
+                confidence=og_dict.get("confidence", 0.9),
+                cwe_id=og_dict.get("cwe_id", ""),
+                owasp_ref=og_dict.get("owasp_ref", ""),
+                agent="opengrep",
+                data_flow=og_dict.get("data_flow", ""),
+                suggested_fix=og_dict.get("suggested_fix", ""),
+                intent_signal="unintentional",
+            )
+            state.all_findings.append(af)
+        except Exception as e:
+            logger.warning("Failed to convert Opengrep finding: %s", e)
+
+    logger.info(
+        "Merged %d Opengrep findings into %d total findings",
+        len(opengrep_findings),
+        len(state.all_findings),
+    )
+
+
 # ── Internal Pipeline Stages ─────────────────────────────────────────
 
 
@@ -256,62 +316,7 @@ async def _run_discovery(
 
     # Merge Opengrep deterministic findings with LLM findings
     if opengrep_findings:
-        from forge.schemas import FindingCategory, FindingLocation
-        for og_dict in opengrep_findings:
-            try:
-                cat_map = {
-                    "security": FindingCategory.SECURITY,
-                    "quality": FindingCategory.QUALITY,
-                    "performance": FindingCategory.PERFORMANCE,
-                    "reliability": FindingCategory.RELIABILITY,
-                    "architecture": FindingCategory.ARCHITECTURE,
-                }
-                cat = cat_map.get(
-                    og_dict.get("category", "security"), FindingCategory.SECURITY
-                )
-                sev_map = {
-                    "critical": FindingSeverity.CRITICAL,
-                    "high": FindingSeverity.HIGH,
-                    "medium": FindingSeverity.MEDIUM,
-                    "low": FindingSeverity.LOW,
-                    "info": FindingSeverity.INFO,
-                }
-                sev = sev_map.get(
-                    og_dict.get("severity", "medium"), FindingSeverity.MEDIUM
-                )
-
-                locs = []
-                for loc in og_dict.get("locations", []):
-                    locs.append(FindingLocation(
-                        file_path=loc.get("file_path", ""),
-                        line_start=loc.get("line_start"),
-                        line_end=loc.get("line_end"),
-                        snippet=loc.get("snippet", ""),
-                    ))
-
-                af = AuditFinding(
-                    title=og_dict.get("title", ""),
-                    description=og_dict.get("description", ""),
-                    category=cat,
-                    severity=sev,
-                    locations=locs,
-                    confidence=og_dict.get("confidence", 0.9),
-                    cwe_id=og_dict.get("cwe_id", ""),
-                    owasp_ref=og_dict.get("owasp_ref", ""),
-                    agent="opengrep",
-                    data_flow=og_dict.get("data_flow", ""),
-                    suggested_fix=og_dict.get("suggested_fix", ""),
-                    intent_signal="unintentional",
-                )
-                state.all_findings.append(af)
-            except Exception as e:
-                logger.warning("Failed to convert Opengrep finding: %s", e)
-
-        logger.info(
-            "Merged %d Opengrep findings into %d total findings",
-            len(opengrep_findings),
-            len(state.all_findings),
-        )
+        _merge_opengrep_findings(state, opengrep_findings)
     if rt:
         rt.update_findings_progress(total=len(state.all_findings))
     emit_phase_complete(

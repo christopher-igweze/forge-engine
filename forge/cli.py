@@ -162,6 +162,47 @@ def _resolve_path(path: str) -> str:
     return str(resolved)
 
 
+def _score_color(score: float | int, high: int = 80, mid: int = 60):
+    """Return a typer color based on score thresholds."""
+    if score >= high:
+        return typer.colors.GREEN
+    return typer.colors.YELLOW if score >= mid else typer.colors.RED
+
+
+def _print_evaluation(eval_data: dict) -> None:
+    """Print v3 evaluation section."""
+    scores = eval_data.get("scores", {})
+    composite = scores.get("composite", "N/A")
+    band_letter = scores.get("band", "?")
+    band_label = scores.get("band_label", "")
+    gate = eval_data.get("quality_gate", {})
+    gate_passed = gate.get("passed", None)
+
+    typer.echo("")
+    typer.echo(typer.style("  Evaluation (v3)", bold=True))
+
+    comp_color = _score_color(composite) if isinstance(composite, (int, float)) else typer.colors.WHITE
+    typer.echo(f"    Score:  {typer.style(f'{composite}/100 ({band_letter})', fg=comp_color)} — {band_label}")
+
+    if gate_passed is None:
+        return
+    gate_color = typer.colors.GREEN if gate_passed else typer.colors.RED
+    gate_text = "PASSED" if gate_passed else "FAILED"
+    typer.echo(f"    Gate:   {typer.style(gate_text, fg=gate_color)} ({gate.get('profile', 'forge-way')})")
+    if not gate_passed:
+        for f in gate.get("failures", []):
+            typer.echo(f"            x {f}")
+
+
+def _print_aivss(aivss: dict) -> None:
+    """Print AIVSS scoring section."""
+    score = aivss.get("score", 0)
+    severity = aivss.get("severity", "Unknown")
+    aivss_color = typer.colors.RED if score >= 7.0 else (typer.colors.YELLOW if score >= 4.0 else typer.colors.GREEN)
+    typer.echo(f"\n  {typer.style('AIVSS Score', bold=True)}: {typer.style(f'{score}/10 ({severity})', fg=aivss_color)}")
+    typer.echo(f"    Base: {aivss.get('base_score', '?')}  AI: {aivss.get('ai_metrics_score', '?')}  AARS: {aivss.get('aars_score', '?')}  Impact: {aivss.get('impact_score', '?')}")
+
+
 def _print_summary(result) -> None:
     """Print a human-readable summary of the FORGE result."""
     typer.echo("")
@@ -183,44 +224,13 @@ def _print_summary(result) -> None:
 
     if result.readiness_report:
         score = result.readiness_report.overall_score
-        color = typer.colors.GREEN if score >= 80 else (typer.colors.YELLOW if score >= 60 else typer.colors.RED)
-        typer.echo(f"  Readiness:    {typer.style(str(score), fg=color)}/100")
+        typer.echo(f"  Readiness:    {typer.style(str(score), fg=_score_color(score))}/100")
 
-    # v3 evaluation
     if hasattr(result, 'evaluation') and result.evaluation:
-        eval_data = result.evaluation
-        scores = eval_data.get("scores", {})
-        composite = scores.get("composite", "N/A")
-        band_letter = scores.get("band", "?")
-        band_label = scores.get("band_label", "")
-        gate = eval_data.get("quality_gate", {})
-        gate_passed = gate.get("passed", None)
+        _print_evaluation(result.evaluation)
 
-        typer.echo("")
-        typer.echo(typer.style("  Evaluation (v3)", bold=True))
-
-        if isinstance(composite, (int, float)):
-            comp_color = typer.colors.GREEN if composite >= 80 else (typer.colors.YELLOW if composite >= 60 else typer.colors.RED)
-        else:
-            comp_color = typer.colors.WHITE
-        typer.echo(f"    Score:  {typer.style(f'{composite}/100 ({band_letter})', fg=comp_color)} — {band_label}")
-
-        if gate_passed is not None:
-            gate_color = typer.colors.GREEN if gate_passed else typer.colors.RED
-            gate_text = "PASSED" if gate_passed else "FAILED"
-            typer.echo(f"    Gate:   {typer.style(gate_text, fg=gate_color)} ({gate.get('profile', 'forge-way')})")
-            if not gate_passed and gate.get("failures"):
-                for f in gate["failures"]:
-                    typer.echo(f"            x {f}")
-
-    # AIVSS scoring
     if hasattr(result, 'aivss_score') and result.aivss_score:
-        aivss = result.aivss_score
-        score = aivss.get("score", 0)
-        severity = aivss.get("severity", "Unknown")
-        aivss_color = typer.colors.RED if score >= 7.0 else (typer.colors.YELLOW if score >= 4.0 else typer.colors.GREEN)
-        typer.echo(f"\n  {typer.style('AIVSS Score', bold=True)}: {typer.style(f'{score}/10 ({severity})', fg=aivss_color)}")
-        typer.echo(f"    Base: {aivss.get('base_score', '?')}  AI: {aivss.get('ai_metrics_score', '?')}  AARS: {aivss.get('aars_score', '?')}  Impact: {aivss.get('impact_score', '?')}")
+        _print_aivss(result.aivss_score)
 
     typer.echo(f"\n  Artifacts:    {Path(result.forge_run_id).parent if result.forge_run_id else 'N/A'}")
     typer.echo("")
@@ -271,7 +281,11 @@ def scan(
     from forge.standalone import run_standalone
 
     typer.echo(f"Scanning {repo_path}...")
-    result = asyncio.run(run_standalone(repo_path=repo_path, config=config))
+    try:
+        result = asyncio.run(run_standalone(repo_path=repo_path, config=config))
+    except Exception as e:
+        typer.echo(f"Error: Scan failed — {type(e).__name__}: {e}", err=True)
+        raise typer.Exit(1)
 
     if json_output:
         typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
@@ -317,7 +331,11 @@ def fix(
     from forge.standalone import run_standalone
 
     typer.echo(f"Running FORGE remediation on {repo_path}...")
-    result = asyncio.run(run_standalone(repo_path=repo_path, config=config))
+    try:
+        result = asyncio.run(run_standalone(repo_path=repo_path, config=config))
+    except Exception as e:
+        typer.echo(f"Error: Fix failed — {type(e).__name__}: {e}", err=True)
+        raise typer.Exit(1)
 
     if json_output:
         typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))

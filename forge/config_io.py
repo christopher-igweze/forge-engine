@@ -6,9 +6,12 @@ with atomic writes and secure permissions.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 CONFIG_PATH = Path.home() / ".vibe2prod" / "config.json"
 
@@ -50,6 +53,6 @@ def save_config(data: dict) -> None:
     except Exception:
         try:
             os.unlink(tmp_path)
-        except OSError:
-            pass
+        except OSError as cleanup_err:
+            logger.debug("Failed to clean up temp config file: %s", cleanup_err)
         raise

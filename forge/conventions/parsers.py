@@ -125,8 +125,8 @@ def parse_eslint(repo_path: str) -> dict:
                     )
                     disabled.extend(off_rules)
                     config_file = name
-                except OSError:
-                    pass
+                except OSError as e:
+                    logger.debug("Failed to read flat ESLint config %s: %s", name, e)
                 break
 
     # Also check package.json eslintConfig
@@ -428,8 +428,8 @@ def parse_jest_config(repo_path: str) -> dict:
                 if threshold:
                     result["coverage_threshold"] = float(threshold.group(1))
                 return result
-            except OSError:
-                pass
+            except OSError as e:
+                logger.debug("Failed to read Jest config %s: %s", name, e)
 
     # package.json[jest]
     pkg = root / "package.json"
