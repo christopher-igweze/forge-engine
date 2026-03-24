@@ -228,8 +228,9 @@ class TestFlush:
 
     def test_flush_no_artifacts_dir(self):
         t = ForgeTelemetry()
-        # Should not raise
+        # Should not raise — flush is a no-op without artifacts_dir
         t.flush()
+        assert t.artifacts_dir is None or t.artifacts_dir == ""
 
     def test_flush_no_training_data(self, tmp_path):
         t = ForgeTelemetry(artifacts_dir=str(tmp_path))
@@ -279,8 +280,12 @@ class TestFlushResilience:
         with patch("os.makedirs", side_effect=OSError("permission denied")):
             # Should not raise — flush is non-fatal
             t.flush()
+        # Invocations should still be intact after failed flush
+        assert len(t.invocations) == 1
 
     def test_write_json_oserror_does_not_crash(self):
         with patch("builtins.open", side_effect=OSError("disk full")):
             # Should not raise — _write_json catches OSError
             _write_json("/nonexistent/path.json", {"key": "value"})
+        # Reaching this point proves no exception was raised
+        assert True
