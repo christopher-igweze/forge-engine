@@ -19,6 +19,7 @@ class CheckResult:
     details: str = ""
     stride: str = ""
     asvs_ref: str = ""
+    fix_guidance: str = ""
 
 
 # ---------------------------------------------------------------------------

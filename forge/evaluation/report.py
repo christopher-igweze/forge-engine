@@ -26,6 +26,7 @@ def build_json_report(
                 "deduction": r.deduction,
                 "details": r.details,
                 "locations": r.locations,
+                "fix_guidance": r.fix_guidance,
             })
 
     report = {
