@@ -22,6 +22,7 @@ import time
 import uuid
 from pathlib import Path
 
+import httpx
 from mcp.server.fastmcp import FastMCP
 
 logger = logging.getLogger(__name__)
@@ -80,8 +81,6 @@ def _detect_git_remote(repo_path: str) -> str:
 async def _send_telemetry(event: str, data: dict) -> None:
     """Fire-and-forget telemetry POST to vibe2prod API."""
     try:
-        import httpx
-
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if _VIBE2PROD_API_KEY:
             headers["X-API-Key"] = _VIBE2PROD_API_KEY
@@ -93,6 +92,8 @@ async def _send_telemetry(event: str, data: dict) -> None:
                 json=payload,
                 headers=headers,
             )
+    except httpx.ConnectError as e:
+        logger.debug("Telemetry connection failed: %s", e)
     except Exception:
         pass  # Never fail on telemetry
 
@@ -111,8 +112,6 @@ async def _sync_scan_to_dashboard(
     if not _VIBE2PROD_API_KEY:
         return
     try:
-        import httpx
-
         repo_url = _detect_git_remote(repo_path)
         repo_name = Path(repo_path).name
 
@@ -133,6 +132,8 @@ async def _sync_scan_to_dashboard(
                     "X-API-Key": _VIBE2PROD_API_KEY,
                 },
             )
+    except httpx.ConnectError as e:
+        logger.debug("Dashboard sync connection failed: %s", e)
     except Exception:
         pass  # Never fail on dashboard sync
 
