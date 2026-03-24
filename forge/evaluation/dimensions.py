@@ -171,6 +171,17 @@ def _safe_import(module_path: str, func_name: str):
         return lambda repo_path: []
 
 
+def _strip_repo_prefix(results: list, repo_path: str) -> list:
+    """Strip repo_path prefix from check result locations for clean display."""
+    prefix = repo_path.rstrip("/") + "/"
+    for r in results:
+        for loc in r.locations:
+            f = loc.get("file", "")
+            if f.startswith(prefix):
+                loc["file"] = f[len(prefix):]
+    return results
+
+
 def run_all_checks(repo_path: str) -> tuple[DimensionScores, list]:
     """Run all dimension checks and return scores + flat list of all CheckResults."""
     run_security_checks = _safe_import("forge.evaluation.checks.security", "run_security_checks")
@@ -181,13 +192,13 @@ def run_all_checks(repo_path: str) -> tuple[DimensionScores, list]:
     run_documentation_checks = _safe_import("forge.evaluation.checks.documentation", "run_documentation_checks")
     run_operations_checks = _safe_import("forge.evaluation.checks.operations", "run_operations_checks")
 
-    sec = run_security_checks(repo_path)
-    rel = run_reliability_checks(repo_path)
-    mnt = run_maintainability_checks(repo_path)
-    tst = run_test_quality_checks(repo_path)
-    prf = run_performance_checks(repo_path)
-    doc = run_documentation_checks(repo_path)
-    ops = run_operations_checks(repo_path)
+    sec = _strip_repo_prefix(run_security_checks(repo_path), repo_path)
+    rel = _strip_repo_prefix(run_reliability_checks(repo_path), repo_path)
+    mnt = _strip_repo_prefix(run_maintainability_checks(repo_path), repo_path)
+    tst = _strip_repo_prefix(run_test_quality_checks(repo_path), repo_path)
+    prf = _strip_repo_prefix(run_performance_checks(repo_path), repo_path)
+    doc = _strip_repo_prefix(run_documentation_checks(repo_path), repo_path)
+    ops = _strip_repo_prefix(run_operations_checks(repo_path), repo_path)
 
     all_results = sec + rel + mnt + tst + prf + doc + ops
 
