@@ -182,6 +182,37 @@ def _strip_repo_prefix(results: list, repo_path: str) -> list:
     return results
 
 
+def _apply_forgeignore(results: list, repo_path: str) -> list:
+    """Filter out check results suppressed by .forgeignore.
+
+    Suppressed checks are marked as passed (deduction zeroed) so they
+    don't drag down scores, but they're still included in the results
+    for transparency.
+    """
+    try:
+        from forge.execution.forgeignore import ForgeIgnore
+        forgeignore = ForgeIgnore.load(repo_path)
+        if not forgeignore.rules:
+            return results
+        for r in results:
+            if r.passed:
+                continue
+            finding_dict = {
+                "check_id": r.check_id,
+                "title": r.name,
+                "severity": r.severity,
+                "locations": r.locations,
+            }
+            is_sup, reason = forgeignore.is_suppressed(finding_dict)
+            if is_sup:
+                r.passed = True
+                r.deduction = 0
+                r.details = f"[Suppressed] {reason or 'Suppressed by .forgeignore'}"
+    except Exception:
+        pass  # Non-fatal — run without suppression
+    return results
+
+
 def run_all_checks(repo_path: str) -> tuple[DimensionScores, list]:
     """Run all dimension checks and return scores + flat list of all CheckResults."""
     run_security_checks = _safe_import("forge.evaluation.checks.security", "run_security_checks")
@@ -192,13 +223,13 @@ def run_all_checks(repo_path: str) -> tuple[DimensionScores, list]:
     run_documentation_checks = _safe_import("forge.evaluation.checks.documentation", "run_documentation_checks")
     run_operations_checks = _safe_import("forge.evaluation.checks.operations", "run_operations_checks")
 
-    sec = _strip_repo_prefix(run_security_checks(repo_path), repo_path)
-    rel = _strip_repo_prefix(run_reliability_checks(repo_path), repo_path)
-    mnt = _strip_repo_prefix(run_maintainability_checks(repo_path), repo_path)
-    tst = _strip_repo_prefix(run_test_quality_checks(repo_path), repo_path)
-    prf = _strip_repo_prefix(run_performance_checks(repo_path), repo_path)
-    doc = _strip_repo_prefix(run_documentation_checks(repo_path), repo_path)
-    ops = _strip_repo_prefix(run_operations_checks(repo_path), repo_path)
+    sec = _apply_forgeignore(_strip_repo_prefix(run_security_checks(repo_path), repo_path), repo_path)
+    rel = _apply_forgeignore(_strip_repo_prefix(run_reliability_checks(repo_path), repo_path), repo_path)
+    mnt = _apply_forgeignore(_strip_repo_prefix(run_maintainability_checks(repo_path), repo_path), repo_path)
+    tst = _apply_forgeignore(_strip_repo_prefix(run_test_quality_checks(repo_path), repo_path), repo_path)
+    prf = _apply_forgeignore(_strip_repo_prefix(run_performance_checks(repo_path), repo_path), repo_path)
+    doc = _apply_forgeignore(_strip_repo_prefix(run_documentation_checks(repo_path), repo_path), repo_path)
+    ops = _apply_forgeignore(_strip_repo_prefix(run_operations_checks(repo_path), repo_path), repo_path)
 
     all_results = sec + rel + mnt + tst + prf + doc + ops
 
