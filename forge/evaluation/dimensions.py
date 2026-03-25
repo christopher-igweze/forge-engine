@@ -183,19 +183,20 @@ def _strip_repo_prefix(results: list, repo_path: str) -> list:
 
 
 def _apply_forgeignore(results: list, repo_path: str) -> list:
-    """Filter out check results suppressed by .forgeignore.
+    """Remove check results suppressed by .forgeignore.
 
-    Suppressed checks are marked as passed (deduction zeroed) so they
-    don't drag down scores, but they're still included in the results
-    for transparency.
+    Suppressed checks are excluded entirely — they don't appear in the
+    report and don't affect scores.
     """
     try:
         from forge.execution.forgeignore import ForgeIgnore
         forgeignore = ForgeIgnore.load(repo_path)
         if not forgeignore.rules:
             return results
+        kept = []
         for r in results:
             if r.passed:
+                kept.append(r)
                 continue
             finding_dict = {
                 "check_id": r.check_id,
@@ -203,14 +204,12 @@ def _apply_forgeignore(results: list, repo_path: str) -> list:
                 "severity": r.severity,
                 "locations": r.locations,
             }
-            is_sup, reason = forgeignore.is_suppressed(finding_dict)
-            if is_sup:
-                r.passed = True
-                r.deduction = 0
-                r.details = f"[Suppressed] {reason or 'Suppressed by .forgeignore'}"
+            is_sup, _ = forgeignore.is_suppressed(finding_dict)
+            if not is_sup:
+                kept.append(r)
+        return kept
     except Exception:
-        pass  # Non-fatal — run without suppression
-    return results
+        return results
 
 
 def run_all_checks(repo_path: str) -> tuple[DimensionScores, list]:
