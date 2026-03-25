@@ -23,6 +23,7 @@ class IgnoreRule:
     category: str | None = None
     path: str | None = None  # glob on file path
     max_severity: str | None = None  # suppress at or below this severity
+    check_id: str | None = None  # exact match on check_id (e.g., SEC-001)
     reason: str = ""
     expires: str | None = None  # ISO date
 
@@ -37,6 +38,12 @@ class IgnoreRule:
     def matches(self, finding: dict) -> bool:
         if self.is_expired():
             return False
+
+        # Check ID filter (exact match)
+        if self.check_id:
+            finding_check_id = finding.get("check_id", "") or finding.get("id", "")
+            if finding_check_id != self.check_id:
+                return False
 
         # Category filter
         if self.category and finding.get("category", "") != self.category:
@@ -93,6 +100,7 @@ class ForgeIgnore:
                     category=item.get("category"),
                     path=item.get("path"),
                     max_severity=item.get("max_severity"),
+                    check_id=item.get("check_id"),
                     reason=item.get("reason", ""),
                     expires=item.get("expires"),
                 )

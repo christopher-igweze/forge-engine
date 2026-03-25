@@ -281,15 +281,38 @@ _DIMENSION_PRIORITY = {
 
 def generate_check_remediation_items(
     failed_checks: list[CheckResult],
+    repo_path: str | None = None,
 ) -> list[dict]:
     """Convert failed deterministic checks into remediation item dicts.
 
     Returns items compatible with RemediationPlan.items format.
     Each item is Tier 1 (deterministic, no LLM needed).
+    Checks suppressed in .forgeignore are excluded.
     """
+    # Load .forgeignore to skip suppressed checks
+    suppressed_ids: set[str] = set()
+    if repo_path:
+        try:
+            from forge.execution.forgeignore import ForgeIgnore
+            forgeignore = ForgeIgnore.load(repo_path)
+            for check in failed_checks:
+                finding_dict = {
+                    "check_id": check.check_id,
+                    "title": check.name,
+                    "severity": check.severity,
+                    "locations": check.locations,
+                }
+                is_sup, _ = forgeignore.is_suppressed(finding_dict)
+                if is_sup:
+                    suppressed_ids.add(check.check_id)
+        except Exception:
+            pass  # Non-fatal — proceed without suppression
+
     items = []
     for check in failed_checks:
         if check.passed:
+            continue
+        if check.check_id in suppressed_ids:
             continue
 
         template = _FIX_TEMPLATES.get(check.check_id, _DEFAULT_TEMPLATE)

@@ -669,7 +669,7 @@ async def _run_triage(
                     )
                     for c in failed_checks_data
                 ]
-                det_items = generate_check_remediation_items(check_results)
+                det_items = generate_check_remediation_items(check_results, repo_path=state.repo_path)
                 if det_items:
                     existing_ids = {item.finding_id for item in state.remediation_plan.items}
                     from forge.schemas import RemediationItem, RemediationTier

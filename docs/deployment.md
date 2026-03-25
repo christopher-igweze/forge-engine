@@ -149,6 +149,19 @@ agentfield call forge-engine.remediate \
 | `FORGE_PORT` | `8004` | Port the FORGE node listens on |
 | `FORGE_HOST` | `0.0.0.0` | Host the FORGE node binds to |
 
+### Secret Management
+
+**NEVER commit API keys or secrets to version control.** Follow these practices:
+
+- **OPENROUTER_API_KEY** and **AGENTFIELD_API_KEY** are sensitive credentials. Load them from:
+  - Environment variables (preferred for CI/CD and containers)
+  - GitHub Secrets / AWS Secrets Manager / HashiCorp Vault (for production)
+  - System keyring via `vibe2prod setup` (for local development)
+- Add `*.env` and `.env*` to `.gitignore` — never commit `.env` files
+- Rotate any credentials that may have been exposed in git history
+- Use `detect-secrets` or similar pre-commit hooks to prevent accidental key commits
+- The CLI stores config at `~/.vibe2prod/config.json` with `0o600` permissions (owner-only read/write). For additional security, use environment variables instead of file storage
+
 ---
 
 ## 5. Configuration
