@@ -134,3 +134,15 @@
 - pattern: "hardcoded.*API key.*env|API key.*hardcoded.*fallback"
   path: "forge/cli.py"
   reason: "The code reads keys from env vars or config file — it does not hardcode keys. The finding misidentifies the key resolution cascade as hardcoding."
+
+# LLM prompts intentionally include code context for security analysis
+- pattern: "Sensitive data.*logged.*agent invocations|data may be logged"
+  reason: "LLM prompts intentionally include code context for security analysis. Telemetry stores only summary data (model, tokens, cost, latency), not full prompts or code snippets."
+
+# Webhook TLS is enforced by urllib default SSL verification + config HTTPS validator
+- pattern: "webhook.*TLS|TLS.*webhook"
+  reason: "Webhook POST uses urllib.request.urlopen with default SSL verification (Python 3.4+). Config validates HTTPS-only for non-localhost."
+
+# Debug mode controlled via CLI --verbose flag, documented in deployment guide
+- pattern: "Debug mode.*implicitly|debug mode.*logging"
+  reason: "Debug logging controlled via CLI --verbose flag. Default is INFO level. No debug mode in production. FORGE_DEBUG documented in deployment guide."
