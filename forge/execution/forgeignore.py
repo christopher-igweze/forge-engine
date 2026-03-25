@@ -39,11 +39,22 @@ class IgnoreRule:
         if self.is_expired():
             return False
 
-        # Check ID filter (exact match)
+        # Check ID is sufficient on its own — deterministic checks use check_id
+        # as the primary identifier. Path is optional narrowing.
         if self.check_id:
             finding_check_id = finding.get("check_id", "") or finding.get("id", "")
-            if finding_check_id != self.check_id:
-                return False
+            if finding_check_id == self.check_id:
+                # If path is also set, require path match too
+                if not self.path:
+                    return True
+                locs = finding.get("locations", [])
+                for loc in locs:
+                    fp = loc.get("file_path", "") or loc.get("file", "")
+                    if fp and fnmatch(fp, self.path):
+                        return True
+                # No locations means match on check_id alone
+                return len(locs) == 0
+            return False
 
         # Category filter
         if self.category and finding.get("category", "") != self.category:
@@ -65,9 +76,12 @@ class IgnoreRule:
         # Path glob
         if self.path:
             locs = finding.get("locations", [])
-            file_path = locs[0].get("file_path", "") if locs else ""
-            if not fnmatch(file_path, self.path):
-                return False
+            for loc in locs:
+                fp = loc.get("file_path", "") or loc.get("file", "")
+                if fp and fnmatch(fp, self.path):
+                    return True
+            # No locations and no other filters matched = no match
+            return len(locs) == 0 if not self.pattern else False
 
         return True
 
