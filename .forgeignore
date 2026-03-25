@@ -235,3 +235,25 @@
   type: "test_fixture"
   category: security
   reason: "Test fixtures: test files contain intentional secrets/vulnerabilities for validation."
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# CATEGORY: FALSE POSITIVES — Scanner lacks data-flow context
+# ────────────────────────────────────────────────────────────────────────────
+
+# F-df3341bb: FORGE has no DEBUG config field. ForgeConfig uses extra="forbid",
+# so unknown keys crash validation. The TLS bypass log is a defensive security
+# measure, not debug mode being "left enabled."
+# Added: 2026-03-25
+- pattern: "Debug mode left enabled|debug mode.*configuration"
+  type: "false_positive"
+  reason: "False positive: ForgeConfig uses extra='forbid' — unknown keys (including debug) crash validation. TLS bypass logging is a defensive security measure, not debug mode."
+
+# F-d2f6ffaa: _safe_import() in dimensions.py is only ever called with
+# hardcoded string literals (lines 217-223). No user input flows into
+# module_path. Opengrep flagged the pattern without tracing data flow.
+# Added: 2026-03-25
+- pattern: "importlib\\.import_module.*untrusted|Untrusted.*importlib"
+  path: "forge/evaluation/dimensions.py"
+  type: "false_positive"
+  reason: "False positive: _safe_import() only called with hardcoded string literals (lines 217-223). No user input reaches module_path."
