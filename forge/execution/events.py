@@ -38,6 +38,12 @@ def _send_webhook(
 ) -> None:
     """Synchronous HTTP POST — runs on a background thread."""
     try:
+        from urllib.parse import urlparse
+
+        scheme = urlparse(url).scheme
+        if scheme not in ("http", "https"):
+            raise ValueError(f"Unsupported URL scheme: {scheme!r} (only http/https allowed)")
+
         req = urllib.request.Request(
             url,
             data=body,

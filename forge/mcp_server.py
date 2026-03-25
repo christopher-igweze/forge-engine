@@ -36,6 +36,9 @@ for _var in _TLS_BYPASS_VARS:
         _TLS_COMPROMISED = True
 
 _VIBE2PROD_URL = os.environ.get("VIBE2PROD_URL", "https://api.vibe2prod.net")
+if not _VIBE2PROD_URL.startswith("https://"):
+    logger.warning("VIBE2PROD_URL must use HTTPS — telemetry disabled for security")
+    _TLS_COMPROMISED = True
 _VIBE2PROD_API_KEY = os.environ.get("VIBE2PROD_API_KEY", "")
 
 mcp = FastMCP(

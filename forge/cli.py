@@ -92,13 +92,8 @@ def config_get(
 
 
 def _check_api_key(api_key: str | None) -> str:
-    """Resolve the OpenRouter API key: flag > env > config file."""
+    """Resolve the OpenRouter API key: flag > env only (no config file fallback)."""
     key = api_key or os.getenv("OPENROUTER_API_KEY")
-
-    # Fall back to config file
-    if not key:
-        config = _load_config()
-        key = config.get("openrouter_api_key")
 
     if not key:
         typer.echo(
