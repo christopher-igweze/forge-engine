@@ -72,7 +72,7 @@ class ForgeConfig(BaseModel):
 
     # ── Webhook Event Emission ────────────────────────────────────
     webhook_url: str = ""       # POST endpoint for scan progress events
-    webhook_token: str = ""     # HMAC-SHA256 signing secret
+    webhook_token: str = ""     # HMAC-SHA256 signing secret — load from env vars, not config files
     webhook_scan_id: str = ""   # Scan ID included in every event payload
 
     @field_validator("webhook_url")
@@ -147,5 +147,5 @@ class ForgeConfig(BaseModel):
 
 def _validate_model_id(model_id: str) -> None:
     """Validate model ID format: provider/model-name."""
-    if not re.fullmatch(r"[a-zA-Z0-9_-]+/[a-zA-Z0-9_.:@-]+", model_id):
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+/[a-zA-Z0-9_.:-]+", model_id):
         raise ValueError(f"Invalid model ID format: '{model_id}'. Expected: provider/model-name")

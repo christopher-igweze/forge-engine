@@ -148,6 +148,7 @@ agentfield call forge-engine.remediate \
 | `AGENTFIELD_API_KEY` | (none) | AgentField authentication key |
 | `FORGE_PORT` | `8004` | Port the FORGE node listens on |
 | `FORGE_HOST` | `0.0.0.0` | Host the FORGE node binds to |
+| `FORGE_DEBUG` | `false` | Enable debug logging. Never enable in production. |
 
 ### Secret Management
 

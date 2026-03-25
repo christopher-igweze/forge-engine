@@ -47,6 +47,8 @@ def _send_webhook(
             },
             method="POST",
         )
+        # SSL certificates are verified by default (Python 3.4+).
+        # Config validator enforces HTTPS for non-localhost webhook URLs.
         urllib.request.urlopen(req, timeout=3)  # noqa: S310
     except Exception:
         logger.warning(
