@@ -36,6 +36,7 @@
 # as a check name in its fix template dictionary — not actual secrets.
 # Added: 2026-03-23
 - check_id: "SEC-001"
+  type: "false_positive"
   reason: "False positive: remediation_items.py contains template text referencing 'hardcoded secrets' as a check name, not actual secrets in code."
 
 # SEC-005: maintainability.py defines regex patterns (like _INSECURE_CRYPTO)
@@ -43,6 +44,7 @@
 # insecure crypto for password hashing.
 # Added: 2026-03-23
 - check_id: "SEC-005"
+  type: "false_positive"
   reason: "False positive: regex patterns that detect insecure crypto in scanned code, not actual insecure crypto usage by FORGE."
 
 # SEC-008: security.py defines _HTTP_HARDCODED regex to detect http:// URLs
@@ -50,12 +52,14 @@
 # which the checker flags as "missing HTTPS enforcement."
 # Added: 2026-03-23
 - check_id: "SEC-008"
+  type: "false_positive"
   reason: "False positive: security check definitions contain HTTP patterns they detect in user code, not missing HTTPS in FORGE itself."
 
 # SEC-012: remediation_items.py contains example text like 'password=password'
 # as remediation guidance describing what insecure defaults look like.
 # Added: 2026-03-23
 - check_id: "SEC-012"
+  type: "false_positive"
   reason: "False positive: template text describing insecure defaults as remediation guidance, not actual insecure default values in FORGE."
 
 
@@ -71,24 +75,28 @@
 # Both are correct patterns for their contexts.
 # Added: 2026-03-23
 - check_id: "SEC-009"
+  type: "not_applicable"
   reason: "Not applicable: MCP server returns structured JSON errors, standalone wraps in ForgeResult. No raw exceptions exposed externally."
 
 # SEC-010: setup_wizard.py shows masked key (first 6 chars + '****') in the
 # TUI for user confirmation. This is intentional UX, not PII leakage.
 # Added: 2026-03-23
 - check_id: "SEC-010"
+  type: "not_applicable"
   reason: "Not applicable: masked key display (api_key[:6] + '****') is intentional UX for user confirmation, not PII in logs."
 
 # REL-002: Health check endpoints are for long-running web services. FORGE
 # is a CLI tool that processes requests on-demand and exits.
 # Added: 2026-03-23
 - check_id: "REL-002"
+  type: "not_applicable"
   reason: "Not applicable: FORGE is a CLI tool, not a long-running web service. No health endpoint needed."
 
 # OPS-001: CI/CD workflows live in the parent vibe2prod monorepo which
 # orchestrates testing and deployment for all sub-projects including forge-engine.
 # Added: 2026-03-23
 - check_id: "OPS-001"
+  type: "not_applicable"
   reason: "Not applicable: CI/CD managed in parent vibe2prod repo via GitHub Actions. Forge-engine is a library within the monorepo."
 
 
@@ -103,12 +111,14 @@
 # FORGE iterates source files for AST analysis — these are file reads, not DB calls.
 # Added: 2026-03-23
 - check_id: "PRF-001"
+  type: "not_applicable"
   reason: "Not applicable: FORGE has no database. Check incorrectly flags file iteration loops as N+1 query patterns."
 
 # PRF-002: Graph traversal and pattern context code is flagged as "unbounded queries."
 # These are in-memory list/dict operations, not database queries.
 # Added: 2026-03-23
 - check_id: "PRF-002"
+  type: "not_applicable"
   reason: "Not applicable: no database queries exist. In-memory graph traversal and list operations misidentified as unbounded DB queries."
 
 
@@ -124,12 +134,14 @@
 # HiveOrchestrator which has its own error handling.
 # Added: 2026-03-24
 - check_id: "REL-001"
+  type: "already_fixed"
   reason: "Already fixed: scan/fix commands have try/except, discovery uses asyncio.gather(return_exceptions=True), hive delegates to orchestrator error handling."
 
 # OPS-004: All env vars are validated — OPENROUTER_API_KEY in _check_api_key()
 # with format check, FORGE_NODE_ID has default, ForgeConfig uses Pydantic strict mode.
 # Added: 2026-03-24
 - check_id: "OPS-004"
+  type: "already_fixed"
   reason: "Already fixed: OPENROUTER_API_KEY validated in _check_api_key() with format check. All other env vars have defaults or flow through ForgeConfig Pydantic validation."
 
 
@@ -142,6 +154,7 @@
 # log at DEBUG level. Full exception handling would break the UX for optional features.
 # Added: 2026-03-24
 - check_id: "REL-004"
+  type: "accepted_risk"
   reason: "Accepted risk: non-critical operations (telemetry, config parsing) use broad except with logger.debug(). Full exception handling would break UX for optional features."
 
 # MNT-002: Pipeline orchestration (phases.py, standalone.py) and domain-specific
@@ -149,6 +162,7 @@
 # coordination and scoring models. Helpers have been extracted where possible.
 # Added: 2026-03-24
 - check_id: "MNT-002"
+  type: "accepted_risk"
   reason: "Accepted risk: complexity in pipeline orchestration and scoring models is inherent to the domain. Helpers extracted where possible without harming readability."
 
 # MNT-005: graph/builder.py and swarm/worker.py have deferred imports inside
@@ -156,21 +170,25 @@
 # These are not runtime circular imports.
 # Added: 2026-03-23
 - check_id: "MNT-005"
+  type: "accepted_risk"
   reason: "Accepted risk: deferred imports inside functions (lazy import pattern) flagged as circular. No runtime circular import exists."
 
 # Config file stored with 0o600 permissions. System keyring planned for v2.
 # Environment variable override is documented as the secure alternative.
 # Added: 2026-03-23
 - pattern: "plaintext.*API key|API key.*plaintext|encrypt.*key.*at rest"
+  type: "accepted_risk"
   reason: "Accepted risk: API keys stored with 0o600 permissions. System keyring integration planned for v2. Env var override documented as secure alternative."
 
 - pattern: "hardcoded.*API key.*env|API key.*hardcoded.*fallback"
+  type: "accepted_risk"
   reason: "Accepted risk: key resolution cascade (flag > env > config file) is intentional. Config file protected by 0o600. Not hardcoding — it's a lookup chain."
 
 # HMAC integrity for config file is over-engineered for a local CLI tool.
 # 0o600 permissions + env var override is sufficient.
 # Added: 2026-03-25
 - pattern: "API key.*compromised config|config file.*integrity"
+  type: "accepted_risk"
   reason: "Accepted risk: CLI config protected by 0o600 permissions. HMAC adds complexity without meaningful security benefit for a local tool."
 
 
@@ -182,18 +200,21 @@
 # security analysis. Telemetry stores only summary data (model, tokens, cost).
 # Added: 2026-03-25
 - pattern: "Sensitive data.*logged.*agent invocations|data may be logged"
+  type: "intentional"
   reason: "Intentional: LLM prompts include code context for security analysis. Telemetry stores only summary data (model, tokens, cost), not full prompts."
 
 # Webhook TLS is enforced by Python's default SSL verification + config-time
 # HTTPS validation. TLS bypass env vars now disable telemetry entirely.
 # Added: 2026-03-25
 - pattern: "webhook.*TLS|TLS.*webhook|TLS certificate verification"
+  type: "intentional"
   reason: "Intentional: webhook uses Python default SSL verification. Config enforces HTTPS for non-localhost. TLS bypass env vars disable telemetry."
 
 # Debug logging is controlled via CLI --verbose flag, not a web server debug mode.
 # Default is INFO level. FORGE_DEBUG documented in deployment guide.
 # Added: 2026-03-25
 - pattern: "Debug mode.*implicitly|debug mode.*logging"
+  type: "intentional"
   reason: "Intentional: debug logging controlled via --verbose CLI flag. Default is INFO. FORGE_DEBUG env var documented in deployment guide."
 
 
@@ -206,9 +227,11 @@
 # Added: 2026-03-20
 - pattern: ".*"
   path: "tests/golden/**"
+  type: "test_fixture"
   reason: "Test fixtures: golden codebases are intentionally insecure for validating FORGE detection accuracy."
 
 - pattern: ".*secret.*|.*hardcoded.*|.*ASVS.*FAIL.*"
   path: "tests/**"
+  type: "test_fixture"
   category: security
   reason: "Test fixtures: test files contain intentional secrets/vulnerabilities for validation."
