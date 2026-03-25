@@ -146,3 +146,50 @@
 # Debug mode controlled via CLI --verbose flag, documented in deployment guide
 - pattern: "Debug mode.*implicitly|debug mode.*logging"
   reason: "Debug logging controlled via CLI --verbose flag. Default is INFO level. No debug mode in production. FORGE_DEBUG documented in deployment guide."
+
+# Config file integrity — HMAC is over-engineered for a local CLI tool
+- pattern: "API key.*compromised config|config file.*integrity"
+  reason: "CLI config file is protected by 0o600 permissions. HMAC integrity checking adds complexity without meaningful security benefit for a local CLI tool. Environment variable override is the secure alternative."
+
+# REL-001: Error handling at API boundaries — already implemented
+- check_id: "REL-001"
+  path: "forge/cli.py"
+  reason: "scan/fix commands already wrap asyncio.run() in try/except with structured error output (lines 284-288, 334-338)."
+
+- check_id: "REL-001"
+  path: "forge/reasoners/discovery.py"
+  reason: "Security auditor uses asyncio.gather(return_exceptions=True) with per-pass error handling. Codebase analyst errors propagate to pipeline-level handler."
+
+- check_id: "REL-001"
+  path: "forge/reasoners/hive_discovery.py"
+  reason: "Delegates to HiveOrchestrator which has its own error handling. Errors propagate to pipeline-level try/except in phases.py."
+
+# MNT-002: High cyclomatic complexity — inherent to domain logic
+- check_id: "MNT-002"
+  path: "forge/phases.py"
+  reason: "Pipeline orchestration has inherent complexity from multi-phase coordination, error recovery, and state management. Already uses extracted helpers."
+
+- check_id: "MNT-002"
+  path: "forge/standalone.py"
+  reason: "Standalone dispatcher complexity comes from registry resolution and config merging. Already factored into separate methods."
+
+- check_id: "MNT-002"
+  path: "forge/conventions/formatter.py"
+  reason: "Convention formatting builds prompt strings from multiple optional sections. Inherent to the domain — each section is a simple conditional block."
+
+- check_id: "MNT-002"
+  path: "forge/evaluation/aivss_detector.py"
+  reason: "AIVSS detection aggregates multiple regex-based checks across file categories. Complexity is inherent to the scoring model dimensions."
+
+# OPS-004: Env validation — already implemented or not applicable
+- check_id: "OPS-004"
+  path: "forge/cli.py"
+  reason: "OPENROUTER_API_KEY validated in _check_api_key() with format check and clear error messages. Config file fallback also supported."
+
+- check_id: "OPS-004"
+  path: "forge/mcp_server.py"
+  reason: "OPENROUTER_API_KEY checked at scan time with structured error response. VIBE2PROD_API_KEY is optional with graceful fallback."
+
+- check_id: "OPS-004"
+  path: "forge/phases.py"
+  reason: "FORGE_NODE_ID uses os.getenv with sensible default. No other env vars consumed directly — all config flows through ForgeConfig."
