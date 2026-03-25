@@ -27,11 +27,13 @@ from mcp.server.fastmcp import FastMCP
 
 logger = logging.getLogger(__name__)
 
-# Warn if TLS verification bypass is detected
+# Detect TLS verification bypass — disable telemetry if compromised
+_TLS_COMPROMISED = False
 _TLS_BYPASS_VARS = ("PYTHONHTTPSVERIFY", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE")
 for _var in _TLS_BYPASS_VARS:
     if os.getenv(_var):
-        logger.warning("TLS bypass environment variable detected: %s — this may disable certificate verification", _var)
+        logger.warning("TLS bypass detected: %s — telemetry disabled for security", _var)
+        _TLS_COMPROMISED = True
 
 _VIBE2PROD_URL = os.environ.get("VIBE2PROD_URL", "https://api.vibe2prod.net")
 _VIBE2PROD_API_KEY = os.environ.get("VIBE2PROD_API_KEY", "")
@@ -80,6 +82,8 @@ def _detect_git_remote(repo_path: str) -> str:
 
 async def _send_telemetry(event: str, data: dict) -> None:
     """Fire-and-forget telemetry POST to vibe2prod API."""
+    if _TLS_COMPROMISED:
+        return
     try:
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if _VIBE2PROD_API_KEY:
@@ -109,6 +113,8 @@ async def _sync_scan_to_dashboard(
 
     Only works when VIBE2PROD_API_KEY is set (user linked their account).
     """
+    if _TLS_COMPROMISED:
+        return
     if not _VIBE2PROD_API_KEY:
         return
     try:

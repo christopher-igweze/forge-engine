@@ -52,7 +52,7 @@ def get_head_sha(repo_path: str) -> str | None:
         if result.returncode == 0:
             return result.stdout.strip()
     except Exception:
-        pass
+        logger.debug("Failed to get HEAD SHA for %s", repo_path, exc_info=True)
     return None
 
 
@@ -65,7 +65,7 @@ def load_last_head_sha(artifacts_dir: str) -> str | None:
             if sha:
                 return sha
         except Exception:
-            pass
+            logger.debug("Failed to read last HEAD SHA from %s", path, exc_info=True)
     return None
 
 

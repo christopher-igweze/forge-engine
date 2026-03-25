@@ -24,16 +24,34 @@ def load_config() -> dict:
 
 
 def validate_config(data: dict) -> list[str]:
-    """Validate config dict against known keys. Returns list of warnings."""
+    """Validate config dict against known keys and typed fields. Returns list of warnings."""
     KNOWN_KEYS = {
         "openrouter_api_key", "setup_completed", "claude_code_integrated",
         "data_sharing", "auth", "models", "quality_gate_profile",
         "evaluation_weights", "opengrep_enabled", "webhook_url",
     }
+    # Typed value validators for fields that ForgeConfig cares about
+    _TYPED_VALIDATORS: dict[str, tuple[callable, str]] = {
+        "webhook_url": (
+            lambda v: v == "" or (isinstance(v, str) and v.startswith(("https://", "http://localhost", "http://127.0.0.1"))),
+            "must be empty or start with https://, http://localhost, or http://127.0.0.1",
+        ),
+        "opengrep_enabled": (
+            lambda v: isinstance(v, bool),
+            "must be a boolean (true/false)",
+        ),
+        "quality_gate_profile": (
+            lambda v: (isinstance(v, str) and v in ("forge-way", "strict", "startup")) or isinstance(v, dict),
+            "must be 'forge-way', 'strict', 'startup', or a custom dict",
+        ),
+    }
     warnings = []
     for key in data:
         if key not in KNOWN_KEYS:
             warnings.append(f"Unknown config key: '{key}'")
+    for key, (validator, msg) in _TYPED_VALIDATORS.items():
+        if key in data and not validator(data[key]):
+            warnings.append(f"Value for '{key}' {msg}")
     return warnings
 
 

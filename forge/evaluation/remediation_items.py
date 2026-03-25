@@ -305,8 +305,11 @@ def generate_check_remediation_items(
                 is_sup, _ = forgeignore.is_suppressed(finding_dict)
                 if is_sup:
                     suppressed_ids.add(check.check_id)
-        except Exception:
-            pass  # Non-fatal — proceed without suppression
+        except Exception as exc:
+            import logging as _logging
+            _logging.getLogger(__name__).debug(
+                "Failed to load .forgeignore for suppression check: %s", exc,
+            )
 
     items = []
     for check in failed_checks:
