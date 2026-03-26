@@ -324,6 +324,7 @@ async def run_security_auditor(
     parallel: bool = True,
     pattern_library_path: str = "",
     project_context: str = "",
+    forgeignore_context: str | None = None,
 ) -> dict:
     """Agent 2: Run 3 security audit passes (optionally in parallel).
 
@@ -331,6 +332,22 @@ async def run_security_auditor(
     """
     logger.info("Agent 2: Security Auditor starting")
     cm = CodebaseMap(**codebase_map)
+
+    # Inject forgeignore context into project context for each pass
+    if forgeignore_context:
+        forgeignore_section = (
+            "\n\n## Previously Assessed Findings\n\n"
+            "The following findings have been reviewed and suppressed by the project "
+            "maintainers. Do not re-flag these patterns or reword them to bypass "
+            "suppression. Focus on genuinely new issues not covered by existing "
+            "suppressions.\n\n"
+            f"{forgeignore_context}"
+        )
+        project_context = (
+            f"{project_context}{forgeignore_section}"
+            if project_context
+            else forgeignore_section.lstrip("\n")
+        )
 
     # Load pattern library for prompt context injection
     pattern_context = _load_pattern_context(codebase_map, pattern_library_path)

@@ -11,9 +11,12 @@ import logging
 import os
 from typing import TYPE_CHECKING
 
+from pathlib import Path
+
 from forge.execution.events import emit_phase_complete, emit_phase_start
 from forge.execution.json_utils import safe_parse_agent_response
 from forge.schemas import (
+    AgentStatus,
     AuditFinding,
     CodebaseMap,
     FindingSeverity,
@@ -92,6 +95,36 @@ def _get_run_telemetry():
         return None
 
 
+async def _call_agent_with_retry(
+    app,
+    target: str,
+    agents_status_list: list[dict],
+    agent_name: str,
+    **kwargs,
+):
+    """Call an agent with one retry. On failure, skip and record."""
+    for attempt in range(2):
+        try:
+            result = await app.call(target, **kwargs)
+            agents_status_list.append(
+                {"agent": agent_name, "status": "completed", "reason": None}
+            )
+            return result
+        except Exception as e:
+            if attempt == 0:
+                logger.warning(
+                    "Agent %s failed (attempt 1), retrying: %s", agent_name, e
+                )
+                continue
+            logger.warning(
+                "Agent %s failed after retry, skipping: %s", agent_name, e
+            )
+            agents_status_list.append(
+                {"agent": agent_name, "status": "skipped", "reason": str(e)}
+            )
+            return None
+
+
 def _merge_opengrep_findings(
     state: ForgeExecutionState,
     opengrep_findings: list[dict],
@@ -160,6 +193,7 @@ async def _run_discovery(
     state: ForgeExecutionState,
     cfg: ForgeConfig,
     resolved_models: dict[str, str],
+    has_api_key: bool = True,
 ) -> dict:
     """Run Discovery phase: Agents 1-2 (codebase analyst + security auditor)."""
     rt = _get_run_telemetry()
@@ -168,6 +202,7 @@ async def _run_discovery(
 
     # ── Classic mode: sequential Agent 1 → Agent 2 ───────────────────
     invocations = 0
+    agents_status: list[dict] = []
 
     # ── Delta mode: compute changed files since last scan ────────────
     delta_files: list[str] | None = None
@@ -228,74 +263,117 @@ async def _run_discovery(
             logger.warning("Opengrep scan failed (non-fatal): %s", e)
 
     # Agent 1: Codebase Analyst (always runs first — everything depends on it)
-    emit_phase_start(cfg, "discovery", "Running Agent 1 (Codebase Analyst).")
-    logger.info("Discovery: Running Agent 1 (Codebase Analyst)")
-    codebase_map_dict = await app.call(
-        f"{NODE_ID}.run_codebase_analyst",
-        repo_path=state.repo_path,
-        repo_url=state.repo_url,
-        artifacts_dir=state.artifacts_dir,
-        model=resolved_models.get("codebase_analyst_model", "minimax/minimax-m2.5"),
-        ai_provider=cfg.provider_for_role("codebase_analyst"),
-    )
-    unwrapped = _unwrap_to_model(codebase_map_dict)
-    if isinstance(unwrapped, dict):
-        try:
-            state.codebase_map = CodebaseMap(**unwrapped)
-        except Exception:
-            state.codebase_map = unwrapped  # fallback to raw dict
+    codebase_map_dict = None
+    if has_api_key:
+        emit_phase_start(cfg, "discovery", "Running Agent 1 (Codebase Analyst).")
+        logger.info("Discovery: Running Agent 1 (Codebase Analyst)")
+        codebase_map_dict = await _call_agent_with_retry(
+            app,
+            f"{NODE_ID}.run_codebase_analyst",
+            agents_status,
+            "codebase_analyst",
+            repo_path=state.repo_path,
+            repo_url=state.repo_url,
+            artifacts_dir=state.artifacts_dir,
+            model=resolved_models.get("codebase_analyst_model", "minimax/minimax-m2.5"),
+            ai_provider=cfg.provider_for_role("codebase_analyst"),
+        )
+        if codebase_map_dict is not None:
+            unwrapped = _unwrap_to_model(codebase_map_dict)
+            if isinstance(unwrapped, dict):
+                try:
+                    state.codebase_map = CodebaseMap(**unwrapped)
+                except Exception:
+                    state.codebase_map = unwrapped  # fallback to raw dict
+            else:
+                state.codebase_map = unwrapped
+            invocations += 1
+        emit_phase_complete(cfg, "codebase_analyst", "Agent 1 (Codebase Analyst) complete.")
     else:
-        state.codebase_map = unwrapped
-    invocations += 1
-    emit_phase_complete(cfg, "codebase_analyst", "Agent 1 (Codebase Analyst) complete.")
+        logger.info("Discovery: Skipping Agent 1 (Codebase Analyst) — no API key")
+        agents_status.append(
+            {"agent": "codebase_analyst", "status": "skipped", "reason": "No API key"}
+        )
 
     # Agent 2: Security Auditor (only LLM auditor in v3 — quality + architecture covered by deterministic checks)
-    emit_phase_start(cfg, "discovery", "Running Agent 2 (Security Auditor).")
-    logger.info("Discovery: Running Agent 2 (Security Auditor)")
+    security_result = None
+    if has_api_key:
+        emit_phase_start(cfg, "discovery", "Running Agent 2 (Security Auditor).")
+        logger.info("Discovery: Running Agent 2 (Security Auditor)")
 
-    # Build project context string for prompt injection (zero LLM cost)
-    project_context_str = ""
-    if cfg.project_context:
+        # Build project context string for prompt injection (zero LLM cost)
+        project_context_str = ""
+        if cfg.project_context:
+            try:
+                from forge.prompts.project_context import build_project_context_string
+                project_context_str = build_project_context_string(cfg.project_context)
+            except Exception as e:
+                logger.warning("Failed to build project context: %s", e)
+
+        # Auto-detect project conventions (deterministic, zero LLM)
         try:
-            from forge.prompts.project_context import build_project_context_string
-            project_context_str = build_project_context_string(cfg.project_context)
+            from forge.conventions import (
+                ConventionsExtractor,
+                build_conventions_context_string,
+            )
+            conventions = ConventionsExtractor(state.repo_path).extract()
+            conventions_str = build_conventions_context_string(conventions)
+            if conventions_str:
+                project_context_str = (
+                    f"{project_context_str}\n\n{conventions_str}"
+                    if project_context_str
+                    else conventions_str
+                )
+                logger.info(
+                    "Discovery: Auto-detected conventions from %d config files",
+                    len(conventions.config_files_found),
+                )
         except Exception as e:
-            logger.warning("Failed to build project context: %s", e)
+            logger.warning("Convention extraction failed (non-fatal): %s", e)
 
-    # Auto-detect project conventions (deterministic, zero LLM)
-    try:
-        from forge.conventions import (
-            ConventionsExtractor,
-            build_conventions_context_string,
+        # Load .forgeignore for prompt injection (prevents re-flagging suppressed patterns)
+        forgeignore_context = None
+        if getattr(cfg, "share_forgeignore", True):
+            forgeignore_path = Path(state.repo_path) / ".forgeignore"
+            if forgeignore_path.exists():
+                try:
+                    from forge.execution.forgeignore import ForgeIgnore
+                    fi = ForgeIgnore.load(state.repo_path)
+                    forgeignore_context = fi.serialize_for_prompt()
+                except Exception as e:
+                    logger.warning("Failed to load .forgeignore for prompt injection: %s", e)
+
+        # Use empty dict as codebase_map if agent 1 was skipped/failed
+        _codebase_map_for_auditor = (
+            codebase_map_dict
+            if codebase_map_dict is not None
+            else {}
         )
-        conventions = ConventionsExtractor(state.repo_path).extract()
-        conventions_str = build_conventions_context_string(conventions)
-        if conventions_str:
-            project_context_str = (
-                f"{project_context_str}\n\n{conventions_str}"
-                if project_context_str
-                else conventions_str
-            )
-            logger.info(
-                "Discovery: Auto-detected conventions from %d config files",
-                len(conventions.config_files_found),
-            )
-    except Exception as e:
-        logger.warning("Convention extraction failed (non-fatal): %s", e)
+        if not isinstance(_codebase_map_for_auditor, dict):
+            _codebase_map_for_auditor = {}
 
-    security_result = await app.call(
-        f"{NODE_ID}.run_security_auditor",
-        repo_path=state.repo_path,
-        codebase_map=codebase_map_dict if isinstance(codebase_map_dict, dict)
-        else codebase_map_dict,
-        artifacts_dir=state.artifacts_dir,
-        model=resolved_models.get("security_auditor_model", "anthropic/claude-haiku-4.5"),
-        ai_provider=cfg.provider_for_role("security_auditor"),
-        parallel=cfg.enable_parallel_audit,
-        pattern_library_path=cfg.pattern_library_path,
-        project_context=project_context_str,
-    )
-    invocations += 1  # Security auditor only
+        security_result = await _call_agent_with_retry(
+            app,
+            f"{NODE_ID}.run_security_auditor",
+            agents_status,
+            "security_auditor",
+            repo_path=state.repo_path,
+            codebase_map=_codebase_map_for_auditor,
+            artifacts_dir=state.artifacts_dir,
+            model=resolved_models.get("security_auditor_model", "anthropic/claude-haiku-4.5"),
+            ai_provider=cfg.provider_for_role("security_auditor"),
+            parallel=cfg.enable_parallel_audit,
+            pattern_library_path=cfg.pattern_library_path,
+            project_context=project_context_str,
+            forgeignore_context=forgeignore_context,
+        )
+        if security_result is not None:
+            invocations += 1
+    else:
+        logger.info("Discovery: Skipping Agent 2 (Security Auditor) — no API key")
+        agents_status.append(
+            {"agent": "security_auditor", "status": "skipped", "reason": "No API key"}
+        )
 
     # Parse security results
     result_dict = security_result if isinstance(security_result, dict) else {}
@@ -527,6 +605,7 @@ async def _run_discovery(
         "quality_gate": quality_gate_result,
         "delta_files": delta_files,
         "evaluation": evaluation_result,
+        "agents_status": agents_status,
     }
 
 
@@ -538,6 +617,7 @@ async def _run_triage(
     tier1_findings: list[dict] | None = None,
     convergence_context: str = "",
     evaluation_result: dict | None = None,
+    has_api_key: bool = True,
 ) -> dict:
     """Run Triage phase: Agents 5-6.
 
@@ -548,10 +628,18 @@ async def _run_triage(
     if rt:
         rt.set_phase("triage")
     invocations = 0
+    agents_status: list[dict] = []
 
     if not state.all_findings:
         logger.info("Triage: No findings to triage")
-        return {"invocations": 0}
+        return {"invocations": 0, "agents_status": agents_status}
+
+    if not has_api_key:
+        logger.info("Triage: Skipping Agent 5 (Fix Strategist) — no API key")
+        agents_status.append(
+            {"agent": "fix_strategist", "status": "skipped", "reason": "No API key"}
+        )
+        return {"invocations": 0, "agents_status": agents_status}
 
     all_findings_dicts = [f.model_dump() for f in state.all_findings]
 
@@ -583,8 +671,11 @@ async def _run_triage(
 
     # Agent 5: Fix Strategist
     logger.info("Triage: Running Agent 5 (Fix Strategist)")
-    plan_dict = await app.call(
+    plan_dict = await _call_agent_with_retry(
+        app,
         f"{NODE_ID}.run_fix_strategist",
+        agents_status,
+        "fix_strategist",
         all_findings=all_findings_dicts,
         codebase_map=codebase_map_dict,
         triage_result=triage_dict if isinstance(triage_dict, dict) else None,
@@ -593,9 +684,9 @@ async def _run_triage(
         ai_provider=cfg.provider_for_role("fix_strategist"),
         convergence_context=convergence_context,
     )
-    if isinstance(plan_dict, dict):
+    if plan_dict is not None and isinstance(plan_dict, dict):
         state.remediation_plan = RemediationPlan(**plan_dict)
-    invocations += 1
+        invocations += 1
 
     # Log strategist dropout
     if state.remediation_plan and state.remediation_plan.items:
@@ -716,6 +807,6 @@ async def _run_triage(
         state.remediation_plan.total_items if state.remediation_plan else 0,
     )
 
-    return {"invocations": invocations}
+    return {"invocations": invocations, "agents_status": agents_status}
 
 

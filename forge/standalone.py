@@ -25,6 +25,7 @@ from pathlib import Path
 from forge.config import ForgeConfig
 from forge.execution.json_utils import safe_parse_agent_response
 from forge.schemas import (
+    AgentStatus,
     AuditFinding,
     FixOutcome,
     ForgeExecutionState,
@@ -182,6 +183,12 @@ async def run_standalone(
         cfg.webhook_scan_id = os.environ.get("FORGE_WEBHOOK_SCAN_ID", "")
 
     resolved = cfg.resolved_models()
+    has_api_key = bool(os.environ.get("OPENROUTER_API_KEY"))
+    if not has_api_key:
+        logger.warning(
+            "OPENROUTER_API_KEY not set — LLM agents will be skipped, "
+            "only deterministic analysis (Opengrep + evaluation) will run."
+        )
     dispatcher = StandaloneDispatcher()
 
     state = ForgeExecutionState(
@@ -218,6 +225,8 @@ async def run_standalone(
     )
     _rt_token = _current_run_telemetry.set(run_telemetry)
 
+    all_agents_status: list[dict] = []
+
     try:
         state.repo_path = _resolve_repo_path(repo_url, repo_path or cfg.repo_path)
         state.artifacts_dir = os.path.join(state.repo_path, ".artifacts")
@@ -232,8 +241,11 @@ async def run_standalone(
         emit_phase_start(cfg, "orchestrator", "Starting FORGE discovery scan.")
 
         # Discovery
-        result = await _run_discovery(dispatcher, state, cfg, resolved)
+        result = await _run_discovery(
+            dispatcher, state, cfg, resolved, has_api_key=has_api_key,
+        )
         state.total_agent_invocations += result["invocations"]
+        all_agents_status.extend(result.get("agents_status", []))
         # Capture v2 metadata from discovery for ForgeResult
         state._v2_findings_delta = result.get("findings_delta")
         state._v2_quality_gate = result.get("quality_gate")
@@ -243,8 +255,10 @@ async def run_standalone(
         result = await _run_triage(
             dispatcher, state, cfg, resolved, tier1_findings,
             evaluation_result=state._v3_evaluation,
+            has_api_key=has_api_key,
         )
         state.total_agent_invocations += result["invocations"]
+        all_agents_status.extend(result.get("agents_status", []))
 
         state.success = True
         emit_scan_complete(
@@ -344,6 +358,9 @@ async def run_standalone(
             getattr(state, "_v2_findings_delta", {}) or {}
         ).get("readiness", {}).get("overall_score") if getattr(state, "_v2_findings_delta", None) else None,
         evaluation=getattr(state, "_v3_evaluation", None),
+        agents_status=[
+            AgentStatus(**s) for s in all_agents_status
+        ],
     )
 
     logger.info(
