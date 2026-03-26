@@ -63,7 +63,7 @@ def check_mcp_registered() -> bool:
         return False
 
 
-def register_mcp(api_key: str, v2p_key: str | None = None, scope: str = "user") -> bool:
+def register_mcp(api_key: str, v2p_key: str | None = None, scope: str = "user", dev: bool = False) -> bool:
     """Register FORGE MCP server with Claude Code.
     Removes existing registration first to ensure env vars are up to date.
     """
@@ -76,13 +76,18 @@ def register_mcp(api_key: str, v2p_key: str | None = None, scope: str = "user") 
             )
         except (FileNotFoundError, subprocess.TimeoutExpired):
             pass
+
+    vibe2prod_url = "https://staging.vibe2prod.verstandai.site" if dev else "https://api.vibe2prod.net"
+
     cmd = [
         "claude", "mcp", "add", "--scope", scope,
         "forge",
         "-e", f"OPENROUTER_API_KEY={api_key}",
+        "-e", f"VIBE2PROD_URL={vibe2prod_url}",
     ]
     if v2p_key:
         cmd.extend(["-e", f"VIBE2PROD_API_KEY={v2p_key}"])
+        cmd.extend(["-e", "VIBE2PROD_DATA_SHARING=true"])
     cmd.extend(["--", "forge-mcp"])
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -116,6 +121,7 @@ def run_headless_setup(
     skip_claude: bool = False,
     share_forgeignore: bool = True,
     scope: str = "user",
+    dev: bool = False,
 ) -> dict:
     """Run setup in headless mode (no prompts). Returns status dict.
 
@@ -141,7 +147,7 @@ def run_headless_setup(
     # Claude Code integration
     claude_integrated = False
     if not skip_claude and detect_claude_code():
-        claude_integrated = register_mcp(api_key or "", v2p_key, scope=scope)
+        claude_integrated = register_mcp(api_key or "", v2p_key, scope=scope, dev=dev)
         if claude_integrated:
             for skill_name in ("forge", "forgeignore"):
                 install_skill(skill_name)
@@ -166,7 +172,7 @@ def run_headless_setup(
 # ── Interactive TUI Mode ────────────────────────────────────────────
 
 
-def run_interactive_setup() -> dict:
+def run_interactive_setup(dev: bool = False) -> dict:
     """Run the Rich TUI setup wizard. Returns status dict."""
     try:
         from rich.console import Console
@@ -179,13 +185,24 @@ def run_interactive_setup() -> dict:
     console = Console()
     config = _load_config()
 
-    console.print(Panel(
-        "[bold blue]FORGE Setup Wizard[/bold blue]\n\n"
-        "Configure FORGE for local code auditing.\n"
-        "Your code never leaves your machine — only LLM API calls go to OpenRouter.",
-        title="vibe2prod",
-        border_style="blue",
-    ))
+    if dev:
+        console.print(Panel(
+            "[bold yellow]FORGE Setup Wizard[/bold yellow]\n\n"
+            "[yellow]⚠ Dev mode — data syncs to STAGING[/yellow]\n"
+            "https://staging.vibe2prod.verstandai.site\n\n"
+            "Configure FORGE for local code auditing.\n"
+            "Your code never leaves your machine.",
+            title="vibe2prod (DEV MODE)",
+            border_style="yellow",
+        ))
+    else:
+        console.print(Panel(
+            "[bold blue]FORGE Setup Wizard[/bold blue]\n\n"
+            "Configure FORGE for local code auditing.\n"
+            "Your code never leaves your machine — only LLM API calls go to OpenRouter.",
+            title="vibe2prod",
+            border_style="blue",
+        ))
 
     # Step 1/6: OpenRouter API Key (now optional)
     console.print("\n[bold]Step 1/6 — OpenRouter API Key[/bold] (optional)")
@@ -265,7 +282,7 @@ def run_interactive_setup() -> dict:
                 default="user",
             )
             with console.status("  Registering MCP server..."):
-                mcp_ok = register_mcp(api_key, v2p_key, scope=scope)
+                mcp_ok = register_mcp(api_key, v2p_key, scope=scope, dev=dev)
             if mcp_ok:
                 console.print(f"  [green]✓[/green] MCP server registered ({scope} scope)")
                 claude_integrated = True
@@ -326,10 +343,12 @@ def run_interactive_setup() -> dict:
     # Step 6/6: Summary
     console.print("\n[bold]Step 6/6 — Summary[/bold]")
     masked_key = (api_key[:6] + "****") if api_key else "Not set (deterministic-only)"
+    vibe2prod_url = "https://staging.vibe2prod.verstandai.site" if dev else "https://api.vibe2prod.net"
     console.print(Panel(
         f"  API Key:        {masked_key}\n"
         f"  Dashboard:      {'Enabled' if v2p_key else 'Disabled'}\n"
         f"  Data Sharing:   {'Enabled' if share else 'Disabled'}\n"
+        f"  Sync URL:       {vibe2prod_url}\n"
         f"  Claude Code:    {'Integrated (' + scope + ' scope)' if claude_integrated else 'Not integrated'}\n"
         f"  Config:         {_config_path()}\n"
         f"\n  [bold green]Setup complete![/bold green] Next: vibe2prod scan ./your-project",

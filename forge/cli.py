@@ -438,6 +438,7 @@ def setup(
     reset: bool = typer.Option(False, "--reset", help="Re-run wizard with existing values pre-populated"),
     share_forgeignore: bool = typer.Option(True, "--share-forgeignore/--no-share-forgeignore", help="Share anonymized .forgeignore suppression data"),
     scope: str = typer.Option("user", "--scope", help="Claude Code MCP scope: user or project"),
+    dev: bool = typer.Option(False, "--dev", help="Developer mode — sync data to staging environment"),
     json_output: bool = typer.Option(False, "--json", "-j", help="Output result as JSON"),
 ) -> None:
     """Configure FORGE — API keys, Claude Code integration, dashboard sync.
@@ -466,11 +467,12 @@ def setup(
             v2p_key=v2p_key,
             share_forgeignore=share_forgeignore,
             scope=scope,
+            dev=dev,
         )
     else:
         # --reset is implicit: interactive mode always pre-populates from existing config.
         # Running `vibe2prod setup` and `vibe2prod setup --reset` behave the same.
-        result = run_interactive_setup()
+        result = run_interactive_setup(dev=dev)
 
     if json_output:
         typer.echo(json.dumps(result))
