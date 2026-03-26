@@ -1,5 +1,5 @@
 {
-  "version": "1.2.4",
+  "version": "1.2.5",
   "skills": {
     "forge": {
       "hash": "61888a142067ea1d691adba90dea84a6d3c76c886d459d1aed4930a93c31a6cb",
@@ -7,7 +7,7 @@
       "install_to": "~/.claude/commands/forge.md"
     },
     "forgeignore": {
-      "hash": "77a9f55467d477aecdc339ea7543b96a4f5ac2857cfbcd62ce5eda9f42121473",
+      "hash": "b60f0d64045ce356a3c837b4b778e919a6dd12b5ee3251c9f8bdbbbc03baee38",
       "file": "skills/forgeignore/SKILL.md",
       "install_to": "~/.claude/commands/forgeignore.md"
     }
