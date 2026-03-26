@@ -77,33 +77,14 @@ Every `.forgeignore` entry MUST have:
 
 ## Data Sharing
 
-After writing all entries for this triage cycle, check the user's data sharing preference:
+After writing all entries for this triage cycle, check sharing preferences:
 
-1. Read `~/.vibe2prod/config.json` and check `share_forgeignore` field
-2. If `true` (or field doesn't exist — default is true):
-   - Collect the NEW entries added in this session
-   - Share anonymized data to the FORGE training endpoint
+1. Call `forge_config()` via the FORGE MCP tool
+2. If `share_forgeignore` is `true`:
+   - The sync happens automatically after the next `forge_scan` — no manual POST needed
+   - If you want to sync immediately without rescanning, POST to `{forge_config().vibe2prod_url}/api/training/forgeignore`
 
-### How to Share
-
-Use a POST request to `https://api.vibe2prod.net/api/training/forgeignore`:
-
-```json
-{
-  "repo_hash": "<SHA-256 hash of git remote URL or repo directory name>",
-  "entries_added": 3,
-  "entries": [
-    {
-      "type": "false_positive",
-      "category": "security",
-      "pattern": "hardcoded.*secret",
-      "reason": "Template text, not actual secrets"
-    }
-  ],
-  "scan_mode": "full",
-  "version": "1.1.0"
-}
-```
+Note: Automatic sync runs after every scan if sharing is consented. Manual POST is only needed for standalone /forgeignore usage outside a scan cycle.
 
 **What is shared:** suppression type, category, pattern/check_id, and reasoning only.
 **What is NOT shared:** repo name, file paths, code content, or any identifying information.

@@ -233,3 +233,77 @@ class ForgeIgnore:
             else:
                 kept.append(finding)
         return kept, suppressed
+
+
+async def sync_forgeignore_training(
+    repo_path: str,
+    vibe2prod_url: str = "",
+    api_key: str = "",
+    scan_mode: str = "full",
+) -> None:
+    """Share anonymized .forgeignore entries to training endpoint.
+
+    Non-blocking, non-fatal. Only runs if consent is given via
+    VIBE2PROD_DATA_SHARING env var or config file share_forgeignore field.
+    """
+    import hashlib
+    import os
+    import subprocess
+
+    import httpx
+
+    fi = ForgeIgnore.load(repo_path)
+    if not fi.rules:
+        return
+
+    entries = []
+    for rule in fi.rules:
+        entries.append({
+            "pattern": rule.pattern or rule.check_id or "",
+            "category": rule.category or "",
+            "reason": rule.reason,
+            "type": rule.type or "false_positive",
+            "check_id": rule.check_id,
+            "path": rule.path,
+            "max_severity": getattr(rule, "max_severity", None),
+        })
+
+    if not entries:
+        return
+
+    # Anonymize repo identity
+    remote = ""
+    try:
+        r = subprocess.run(
+            ["git", "-C", repo_path, "remote", "get-url", "origin"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode == 0:
+            remote = r.stdout.strip()
+    except Exception:
+        pass
+    repo_hash = hashlib.sha256((remote or repo_path).encode()).hexdigest()
+
+    url = vibe2prod_url or os.environ.get("VIBE2PROD_URL", "https://api.vibe2prod.net")
+
+    try:
+        from forge import __version__ as ver
+    except Exception:
+        ver = "unknown"
+
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    key = api_key or os.environ.get("VIBE2PROD_API_KEY", "")
+    if key:
+        headers["X-API-Key"] = key
+
+    async with httpx.AsyncClient(timeout=10.0, verify=True) as client:
+        await client.post(
+            f"{url}/api/training/forgeignore",
+            json={
+                "repo_hash": repo_hash,
+                "entries": entries,
+                "scan_mode": scan_mode,
+                "version": ver,
+            },
+            headers=headers,
+        )

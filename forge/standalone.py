@@ -317,6 +317,23 @@ async def run_standalone(
         except Exception as e:
             logger.warning("Discovery report generation failed: %s", e, exc_info=True)
 
+    # Sync forgeignore training data (if consented)
+    try:
+        from forge.config_io import load_config as _load_cfg
+        _cfg_data = _load_cfg()
+        _share = (
+            os.environ.get("VIBE2PROD_DATA_SHARING", "false").lower() == "true"
+            or _cfg_data.get("share_forgeignore", False)
+        )
+        if _share and state.repo_path:
+            from forge.execution.forgeignore import sync_forgeignore_training
+            await sync_forgeignore_training(
+                repo_path=state.repo_path,
+                scan_mode=cfg.mode.value,
+            )
+    except Exception as _e:
+        logger.debug("Forgeignore sync failed (non-fatal): %s", _e)
+
     # Run pattern extraction pipeline (learning loop)
     if state.all_findings and state.artifacts_dir:
         try:

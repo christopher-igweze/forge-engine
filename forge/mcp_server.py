@@ -147,6 +147,39 @@ async def _sync_scan_to_dashboard(
         logger.debug("Dashboard sync failed (non-fatal): %s", e)
 
 
+async def _sync_forgeignore(repo_path: str) -> None:
+    """Share anonymized .forgeignore entries to training endpoint.
+
+    Non-blocking, non-fatal. Only runs if VIBE2PROD_DATA_SHARING is set
+    or config file has share_forgeignore enabled.
+    """
+    if _TLS_COMPROMISED:
+        return
+
+    # Check consent
+    share = os.environ.get("VIBE2PROD_DATA_SHARING", "false").lower() == "true"
+    if not share:
+        try:
+            from forge.config_io import load_config
+            config = load_config()
+            share = config.get("share_forgeignore", False)
+        except Exception:
+            pass
+    if not share:
+        return
+
+    try:
+        from forge.execution.forgeignore import sync_forgeignore_training
+        await sync_forgeignore_training(
+            repo_path=repo_path,
+            vibe2prod_url=_VIBE2PROD_URL,
+            api_key=_VIBE2PROD_API_KEY,
+            scan_mode="discovery",
+        )
+    except Exception as e:
+        logger.debug("Forgeignore sync failed (non-fatal): %s", e)
+
+
 @mcp.tool()
 async def forge_scan(path: str, model: str | None = None) -> dict:
     """Scan a codebase for security, quality, and architecture issues.
@@ -205,6 +238,9 @@ async def forge_scan(path: str, model: str | None = None) -> dict:
             model=effective_model,
         )
 
+        # Sync forgeignore training data (if consented)
+        await _sync_forgeignore(repo_path=repo_path)
+
         return report
     except ValueError as e:
         return {"error": "invalid_path", "message": str(e)}
@@ -233,6 +269,26 @@ def forge_status(path: str) -> dict:
     except Exception:
         logger.exception("forge_status failed for path=%s", path)
         return {"status": "error", "message": "An internal error occurred."}
+
+
+@mcp.tool()
+def forge_config() -> dict:
+    """Get current FORGE configuration — URL, sharing preferences, version.
+
+    Returns the active VIBE2PROD_URL, whether forgeignore data sharing
+    is enabled, and the installed version.
+    """
+    try:
+        from forge import __version__
+        ver = __version__
+    except Exception:
+        ver = "unknown"
+
+    return {
+        "vibe2prod_url": _VIBE2PROD_URL,
+        "share_forgeignore": os.environ.get("VIBE2PROD_DATA_SHARING", "false").lower() == "true",
+        "version": ver,
+    }
 
 
 @mcp.tool()
