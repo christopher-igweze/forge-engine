@@ -199,6 +199,26 @@ class ForgeIgnore:
                 return True, rule.reason
         return False, None
 
+    def serialize_for_prompt(self) -> str:
+        """Serialize .forgeignore rules into a human-readable string for LLM prompt injection."""
+        if not self.rules:
+            return ""
+        lines = []
+        for rule in self.rules:
+            parts = []
+            if rule.check_id:
+                parts.append(f"Check ID: {rule.check_id}")
+            if rule.pattern:
+                parts.append(f"Pattern: {rule.pattern}")
+            if rule.path:
+                parts.append(f"Path: {rule.path}")
+            if rule.category:
+                parts.append(f"Category: {rule.category}")
+            parts.append(f"Type: {rule.type or 'unknown'}")
+            parts.append(f"Reason: {rule.reason or 'no reason given'}")
+            lines.append(" | ".join(parts))
+        return "\n".join(lines)
+
     def apply(
         self, findings: list[dict]
     ) -> tuple[list[dict], list[dict]]:

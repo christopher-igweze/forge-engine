@@ -608,6 +608,14 @@ class ForgeExecutionState(BaseModel):
     files_changed_this_run: list[str] = Field(default_factory=list)
 
 
+class AgentStatus(BaseModel):
+    """Track whether each agent completed or was skipped."""
+
+    agent: str
+    status: Literal["completed", "skipped"] = "completed"
+    reason: str | None = None
+
+
 class ForgeResult(BaseModel):
     """Final output of a FORGE run."""
 
@@ -636,3 +644,6 @@ class ForgeResult(BaseModel):
 
     # v3: AIVSS scoring
     aivss_score: dict | None = None  # AIVSS result with score, severity, factors
+
+    # v4: Agent lifecycle tracking
+    agents_status: list[AgentStatus] = Field(default_factory=list)
