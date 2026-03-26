@@ -74,10 +74,11 @@ def _step_package(dry_run: bool = False, force: bool = False) -> dict:
     if dry_run:
         return {"name": "package", "status": "would_update", "detail": f"{current} → {latest}"}
 
-    # Try pip upgrade
+    # Try pip upgrade — use --no-cache-dir to avoid stale index
     try:
         subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--upgrade", "vibe2prod", "--quiet"],
+            [sys.executable, "-m", "pip", "install", f"vibe2prod=={latest}",
+             "--no-cache-dir", "--quiet"],
             check=True,
             capture_output=True,
             text=True,
