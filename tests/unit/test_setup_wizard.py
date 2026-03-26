@@ -124,28 +124,74 @@ class TestRegisterMCP(unittest.TestCase):
         cmd = mock_run.call_args[0][0]
         assert any("VIBE2PROD_API_KEY" in str(c) for c in cmd)
 
+    @patch("forge.setup_wizard.check_mcp_registered", return_value=False)
+    @patch("subprocess.run")
+    def test_register_mcp_project_scope(self, mock_run, mock_check):
+        mock_run.return_value = MagicMock(returncode=0)
+        from forge.setup_wizard import register_mcp
+        result = register_mcp("sk-or-test", scope="project")
+        self.assertTrue(result)
+        cmd = mock_run.call_args[0][0]
+        assert "--scope" in cmd
+        scope_idx = cmd.index("--scope")
+        assert cmd[scope_idx + 1] == "project"
+
 
 class TestInstallSkill(unittest.TestCase):
 
+    def _setup_fake_env(self, tmpdir, skill_name="forge"):
+        """Create a fake package directory with skill source and home dir."""
+        fakepkg = Path(tmpdir) / "fakepkg"
+        fakepkg.mkdir()
+        skill_dir = fakepkg / "skills" / skill_name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(f"# {skill_name} Skill")
+        fake_module = fakepkg / "setup_wizard.py"
+        fake_module.write_text("")
+        home_dir = Path(tmpdir) / "home"
+        home_dir.mkdir()
+        return fakepkg, fake_module, home_dir
+
     def test_install_skill_copies_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            src_dir = Path(tmpdir) / "skills" / "forge"
-            src_dir.mkdir(parents=True)
-            (src_dir / "SKILL.md").write_text("# FORGE Skill")
-            dst_dir = Path(tmpdir) / ".claude" / "commands"
-            with patch("forge.setup_wizard._home_dir", return_value=Path(tmpdir)), \
-                 patch("forge.setup_wizard._skill_src_path", return_value=src_dir / "SKILL.md"):
-                from forge.setup_wizard import install_skill
-                result = install_skill()
-                self.assertTrue(result)
-                self.assertTrue((dst_dir / "forge.md").exists())
+            _, fake_module, home_dir = self._setup_fake_env(tmpdir, "forge")
+            import forge.setup_wizard as sw
+            orig_file = sw.__file__
+            try:
+                sw.__file__ = str(fake_module)
+                with patch("forge.setup_wizard._home_dir", return_value=home_dir):
+                    result = sw.install_skill()
+                    self.assertTrue(result)
+                    self.assertTrue((home_dir / ".claude" / "commands" / "forge.md").exists())
+            finally:
+                sw.__file__ = orig_file
+
+    def test_install_skill_custom_name(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fakepkg, fake_module, home_dir = self._setup_fake_env(tmpdir, "forgeignore")
+            import forge.setup_wizard as sw
+            orig_file = sw.__file__
+            try:
+                sw.__file__ = str(fake_module)
+                with patch("forge.setup_wizard._home_dir", return_value=home_dir):
+                    result = sw.install_skill("forgeignore")
+                    self.assertTrue(result)
+                    self.assertTrue((home_dir / ".claude" / "commands" / "forgeignore.md").exists())
+            finally:
+                sw.__file__ = orig_file
 
     def test_install_skill_missing_source(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("forge.setup_wizard._skill_src_path", return_value=Path(tmpdir) / "nonexistent"):
-                from forge.setup_wizard import install_skill
-                result = install_skill()
+            fake_module = Path(tmpdir) / "setup_wizard.py"
+            fake_module.write_text("")
+            import forge.setup_wizard as sw
+            orig_file = sw.__file__
+            try:
+                sw.__file__ = str(fake_module)
+                result = sw.install_skill()
                 self.assertFalse(result)
+            finally:
+                sw.__file__ = orig_file
 
 
 class TestHeadlessSetup(unittest.TestCase):
@@ -161,6 +207,18 @@ class TestHeadlessSetup(unittest.TestCase):
                 data = json.loads(config_path.read_text())
                 self.assertEqual(data["openrouter_api_key"], "sk-or-test123")
                 self.assertTrue(data["setup_completed"])
+
+    def test_headless_no_api_key_succeeds(self):
+        """Headless mode works without an API key (deterministic-only)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / ".vibe2prod" / "config.json"
+            with patch("forge.config_io.CONFIG_PATH", config_path), \
+                 patch("forge.setup_wizard.detect_claude_code", return_value=False):
+                from forge.setup_wizard import run_headless_setup
+                result = run_headless_setup()
+                self.assertTrue(result["success"])
+                data = json.loads(config_path.read_text())
+                self.assertEqual(data["openrouter_api_key"], "")
 
     def test_headless_invalid_key_fails(self):
         from forge.setup_wizard import run_headless_setup
@@ -184,3 +242,26 @@ class TestHeadlessSetup(unittest.TestCase):
         from forge.setup_wizard import run_headless_setup
         result = run_headless_setup(api_key="sk-or-test", v2p_key="bad-key")
         self.assertFalse(result["success"])
+
+    def test_headless_share_forgeignore(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / ".vibe2prod" / "config.json"
+            with patch("forge.config_io.CONFIG_PATH", config_path), \
+                 patch("forge.setup_wizard.detect_claude_code", return_value=False):
+                from forge.setup_wizard import run_headless_setup
+                result = run_headless_setup(api_key="sk-or-test", share_forgeignore=False)
+                self.assertTrue(result["success"])
+                data = json.loads(config_path.read_text())
+                self.assertFalse(data["share_forgeignore"])
+
+    def test_headless_scope_param(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / ".vibe2prod" / "config.json"
+            with patch("forge.config_io.CONFIG_PATH", config_path), \
+                 patch("forge.setup_wizard.detect_claude_code", return_value=True), \
+                 patch("forge.setup_wizard.register_mcp", return_value=True) as mock_mcp, \
+                 patch("forge.setup_wizard.install_skill", return_value=True):
+                from forge.setup_wizard import run_headless_setup
+                result = run_headless_setup(api_key="sk-or-test", scope="project")
+                self.assertTrue(result["success"])
+                mock_mcp.assert_called_once_with("sk-or-test", None, scope="project")

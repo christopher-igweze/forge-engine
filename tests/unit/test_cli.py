@@ -2,6 +2,7 @@
 
 import json
 import os
+import unittest.mock
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -31,11 +32,11 @@ class TestCheckApiKey:
         result = _check_api_key("sk-or-v1-argkey")
         assert result == "sk-or-v1-argkey"
 
-    def test_missing_key_exits(self, monkeypatch):
-        from click.exceptions import Exit
+    def test_missing_key_returns_none(self, monkeypatch):
         monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-        with pytest.raises(Exit):
-            _check_api_key(None)
+        with unittest.mock.patch("forge.cli._load_config", return_value={}):
+            result = _check_api_key(None)
+        assert result is None
 
     def test_invalid_format_warns(self, monkeypatch, capsys):
         monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
@@ -132,7 +133,7 @@ class TestAuthCommand:
 
     def test_auth_status_not_authenticated(self, tmp_path):
         """auth status when not logged in."""
-        with patch("forge.cli.CONFIG_PATH", tmp_path / "config.json"):
+        with patch("forge.config_io.CONFIG_PATH", tmp_path / "config.json"):
             result = runner.invoke(app, ["auth", "status"])
             assert result.exit_code == 0
             assert "Not authenticated" in result.output
@@ -147,7 +148,7 @@ class TestAuthCommand:
     def test_auth_unknown_action(self):
         """auth with unknown action shows error."""
         result = runner.invoke(app, ["auth", "bogus"])
-        assert result.exit_code == 1
+        assert result.exit_code != 0
 
 
 class TestScanFlags:
@@ -161,15 +162,10 @@ class TestScanFlags:
         result = runner.invoke(app, ["scan", "--help"])
         assert "--max-time" in result.output
 
-    def test_fix_has_max_cost_flag(self):
-        """fix --help shows --max-cost flag."""
+    def test_no_fix_command(self):
+        """fix command should not exist."""
         result = runner.invoke(app, ["fix", "--help"])
-        assert "--max-cost" in result.output
-
-    def test_fix_has_max_time_flag(self):
-        """fix --help shows --max-time flag."""
-        result = runner.invoke(app, ["fix", "--help"])
-        assert "--max-time" in result.output
+        assert result.exit_code != 0
 
 
 class TestScanWithEvaluation:

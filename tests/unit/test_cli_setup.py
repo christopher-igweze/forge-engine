@@ -85,13 +85,21 @@ class TestSetupCommand(unittest.TestCase):
 
 class TestFirstRunDetection(unittest.TestCase):
 
-    def test_scan_without_config_or_env_shows_setup_message(self):
+    def test_scan_without_config_or_env_runs_deterministic_mode(self):
+        """Scan without API key should run in deterministic-only mode, not fail."""
         from typer.testing import CliRunner
         from forge.cli import app
         runner = CliRunner()
         with patch("forge.config_io.CONFIG_PATH", Path("/nonexistent/config.json")), \
-             patch.dict(os.environ, {}, clear=True):
+             patch.dict(os.environ, {}, clear=True), \
+             patch("forge.cli.asyncio.run") as mock_run:
             os.environ.pop("OPENROUTER_API_KEY", None)
+            mock_run.return_value = unittest.mock.MagicMock(
+                success=True, forge_run_id="test", mode=unittest.mock.MagicMock(value="full"),
+                duration_seconds=1.0, total_findings=0, findings_fixed=0,
+                findings_deferred=0, agent_invocations=0, cost_usd=0,
+                readiness_report=None, evaluation=None, aivss_score=None,
+                model_dump=lambda mode: {},
+            )
             result = runner.invoke(app, ["scan", "/tmp"])
-            self.assertIn("setup", result.output.lower())
-            self.assertNotEqual(result.exit_code, 0)
+            self.assertIn("deterministic", result.output.lower())
