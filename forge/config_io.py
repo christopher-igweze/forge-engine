@@ -29,6 +29,8 @@ def validate_config(data: dict) -> list[str]:
         "openrouter_api_key", "setup_completed", "claude_code_integrated",
         "data_sharing", "auth", "models", "quality_gate_profile",
         "evaluation_weights", "opengrep_enabled", "webhook_url",
+        "share_forgeignore",
+        "auto_update_check",
     }
     # Typed value validators for fields that ForgeConfig cares about
     _TYPED_VALIDATORS: dict[str, tuple[callable, str]] = {
@@ -43,6 +45,10 @@ def validate_config(data: dict) -> list[str]:
         "quality_gate_profile": (
             lambda v: (isinstance(v, str) and v in ("forge-way", "strict", "startup")) or isinstance(v, dict),
             "must be 'forge-way', 'strict', 'startup', or a custom dict",
+        ),
+        "auto_update_check": (
+            lambda v: isinstance(v, bool),
+            "must be a boolean (true/false)",
         ),
     }
     warnings = []

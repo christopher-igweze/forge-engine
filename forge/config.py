@@ -109,6 +109,9 @@ class ForgeConfig(BaseModel):
     opengrep_timeout: int = 300            # Max seconds for Opengrep scan
     opengrep_rules_dir: str = ""           # Custom rules dir (empty = use built-in forge/rules/)
 
+    # ── Data Sharing ───────────────────────────────────────────────
+    share_forgeignore: bool = True  # Share anonymized .forgeignore suppression data
+
     def resolved_models(self) -> dict[str, str]:
         """Resolve model fields using the standard cascade.
 
