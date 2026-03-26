@@ -1,8 +1,7 @@
 """Vibe2Prod CLI — local code audit and remediation.
 
 Usage:
-    vibe2prod scan ./my-app           # Discovery only (scan + triage)
-    vibe2prod fix ./my-app            # Full pipeline (scan + fix + validate)
+    vibe2prod scan ./my-app           # Full pipeline (scan + triage + remediation plan)
     vibe2prod report ./my-app         # Generate report from last run
     vibe2prod status ./my-app         # Check running scan progress
     vibe2prod config set key value    # Set a config value
@@ -10,7 +9,8 @@ Usage:
     vibe2prod auth login              # Authenticate (coming soon)
 
 Code never leaves your machine — only LLM API calls go to OpenRouter.
-Set OPENROUTER_API_KEY in your environment before running.
+Works with or without an API key. Without a key, you get Opengrep SAST
++ deterministic scoring. With a key, you also get LLM-powered analysis.
 """
 
 from __future__ import annotations
@@ -31,10 +31,36 @@ app = typer.Typer(
     add_completion=False,
 )
 
+
+@app.callback(invoke_without_command=True)
+def _app_callback(ctx: typer.Context) -> None:
+    """Auto-check for updates on every command (non-blocking)."""
+    if ctx.invoked_subcommand is None:
+        # No subcommand = show help (preserves no_args_is_help behavior)
+        typer.echo(ctx.get_help())
+        raise typer.Exit(0)
+
+    # Skip auto-check during update command itself
+    if ctx.invoked_subcommand == "update":
+        return
+
+    # Check if auto-check is disabled
+    from forge.config_io import load_config
+    config = load_config()
+    if config.get("auto_update_check") is False:
+        return
+
+    from forge.updater import check_for_update_background
+    check_for_update_background()
+
+
 # ── Config sub-app ───────────────────────────────────────────────────
 
 config_app = typer.Typer(help="Manage FORGE configuration.")
-app.add_typer(config_app, name="config")
+app.add_typer(config_app, name="config", rich_help_panel="Setup & Config")
+
+auth_app = typer.Typer(help="Authenticate with the Vibe2Prod platform.")
+app.add_typer(auth_app, name="auth", rich_help_panel="Authentication")
 
 from forge.config_io import load_config as _load_config, save_config as _save_config, validate_config as _validate_config, CONFIG_PATH
 
@@ -91,19 +117,22 @@ def config_get(
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
-def _check_api_key(api_key: str | None) -> str:
-    """Resolve the OpenRouter API key: flag > env only (no config file fallback)."""
+def _check_api_key(api_key: str | None) -> str | None:
+    """Resolve the OpenRouter API key: flag > env only (no config file fallback).
+
+    Returns the key string if found, None if not found.
+    Sets os.environ["OPENROUTER_API_KEY"] if key is found.
+    Does NOT raise typer.Exit — caller decides what to do.
+    """
     key = api_key or os.getenv("OPENROUTER_API_KEY")
 
+    # Fall back to config file
     if not key:
-        typer.echo(
-            "Error: No API key found.\n"
-            "Run 'vibe2prod setup' to configure, or set OPENROUTER_API_KEY:\n\n"
-            "  export OPENROUTER_API_KEY=sk-or-v1-...\n"
-            "  vibe2prod scan ./my-app\n",
-            err=True,
-        )
-        raise typer.Exit(1)
+        config = _load_config()
+        key = config.get("openrouter_api_key")
+
+    if not key:
+        return None
 
     if not key.startswith("sk-or-"):
         typer.echo(
@@ -234,7 +263,7 @@ def _print_summary(result) -> None:
 # ── Commands ─────────────────────────────────────────────────────────
 
 
-@app.command()
+@app.command(rich_help_panel="Scanning")
 def scan(
     path: str = typer.Argument(..., help="Path to the repository to scan"),
     api_key: str | None = typer.Option(None, "--api-key", "-k", help="OpenRouter API key (or set OPENROUTER_API_KEY)"),
@@ -246,29 +275,42 @@ def scan(
     aivss: bool = typer.Option(False, "--aivss", help="Include OWASP AIVSS scoring in report"),
     json_output: bool = typer.Option(False, "--json", "-j", help="Output result as JSON"),
 ) -> None:
-    """Scan a repository for issues (discovery + triage, no fixes).
+    """Scan a repository and produce findings + remediation plan.
 
-    Runs FORGE Agents 1-6: codebase analysis, security audit, quality
-    audit, architecture review, triage classification, and fix strategy.
+    Runs the full FORGE pipeline: codebase analysis, security audit,
+    quality audit, architecture review, triage, and fix strategy.
+
+    Works with or without an API key. Without a key, you get Opengrep
+    SAST + deterministic scoring. With a key, you also get LLM analysis.
 
     Example:
         vibe2prod scan ./my-app
         vibe2prod scan ./my-app --model anthropic/claude-haiku-4.5
     """
-    _check_api_key(api_key)
+    resolved_key = _check_api_key(api_key)
+    if resolved_key is None:
+        typer.echo(
+            "No API key found. Running in deterministic-only mode "
+            "(Opengrep + evaluation). Add a key later: "
+            "vibe2prod config set openrouter_api_key sk-or-..."
+        )
     _setup_logging(verbose)
     repo_path = _resolve_path(path)
 
     config: dict = {
-        "mode": "discovery",
+        "mode": "full",
         "repo_path": repo_path,
         "quality_gate_profile": gate,
     }
     if model:
         config["models"] = {"default": model}
     if max_cost > 0:
+        typer.echo("Warning: --max-cost is deprecated and will be removed in a future release. "
+                   "Scans are now efficient by default.", err=True)
         config["max_cost_usd"] = max_cost
     if max_time > 0:
+        typer.echo("Warning: --max-time is deprecated and will be removed in a future release. "
+                   "Scans are now efficient by default.", err=True)
         config["max_duration_seconds"] = max_time
     if aivss:
         config["aivss_enabled"] = True
@@ -288,59 +330,7 @@ def scan(
         _print_summary(result)
 
 
-@app.command()
-def fix(
-    path: str = typer.Argument(..., help="Path to the repository to scan and plan fixes"),
-    api_key: str | None = typer.Option(None, "--api-key", "-k", help="OpenRouter API key (or set OPENROUTER_API_KEY)"),
-    model: str | None = typer.Option(None, "--model", "-m", help="Default model override"),
-    max_cost: float = typer.Option(0.0, "--max-cost", help="Max cost in USD before aborting (0 = no limit)"),
-    max_time: float = typer.Option(0.0, "--max-time", help="Max duration in seconds before aborting (0 = no limit)"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
-    json_output: bool = typer.Option(False, "--json", "-j", help="Output result as JSON"),
-) -> None:
-    """Scan, evaluate, and produce a remediation plan.
-
-    Runs discovery + triage to produce a prioritized fix plan.
-    Apply fixes using the plan with your preferred coding tool
-    (Claude Code, Cursor, etc.).
-
-    Example:
-        vibe2prod fix ./my-app
-        vibe2prod fix ./my-app --model anthropic/claude-haiku-4.5
-    """
-    _check_api_key(api_key)
-    _setup_logging(verbose)
-    repo_path = _resolve_path(path)
-
-    config: dict = {
-        "mode": "full",
-        "repo_path": repo_path,
-    }
-    if model:
-        config["models"] = {"default": model}
-    if max_cost > 0:
-        config["max_cost_usd"] = max_cost
-    if max_time > 0:
-        config["max_duration_seconds"] = max_time
-
-    from forge.standalone import run_standalone
-
-    typer.echo(f"Running FORGE remediation on {repo_path}...")
-    try:
-        result = asyncio.run(run_standalone(repo_path=repo_path, config=config))
-    except Exception as e:
-        typer.echo(f"Error: Fix failed — {type(e).__name__}: {e}", err=True)
-        raise typer.Exit(1)
-
-    if json_output:
-        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
-    else:
-        _print_summary(result)
-
-    raise typer.Exit(0 if result.success else 1)
-
-
-@app.command()
+@app.command(rich_help_panel="Scanning")
 def status(
     path: str = typer.Argument(".", help="Path to the repository"),
 ) -> None:
@@ -413,43 +403,41 @@ def status(
     typer.echo("")
 
 
-@app.command()
-def auth(
-    action: str = typer.Argument("login", help="Auth action: login, logout, status"),
-) -> None:
-    """Authenticate with the Vibe2Prod platform (optional).
+@auth_app.command()
+def login() -> None:
+    """Log in to the Vibe2Prod platform."""
+    typer.echo("Vibe2Prod platform authentication is coming soon.")
+    typer.echo("For now, FORGE runs fully locally with your OpenRouter API key.")
+    typer.echo("\nSet up: export OPENROUTER_API_KEY=sk-or-v1-...")
 
-    Enables: scan history sync, cross-repo trends, team sharing, cloud remediation.
 
-    Example:
-        vibe2prod auth login
-    """
-    if action == "login":
-        typer.echo("Vibe2Prod platform authentication is coming soon.")
-        typer.echo("For now, FORGE runs fully locally with your OpenRouter API key.")
-        typer.echo("\nSet up: export OPENROUTER_API_KEY=sk-or-v1-...")
-    elif action == "logout":
-        config = _load_config()
-        config.pop("auth", None)
-        _save_config(config)
-        typer.echo("Logged out.")
-    elif action == "status":
-        config = _load_config()
-        if config.get("auth", {}).get("api_key"):
-            typer.echo("Authenticated with Vibe2Prod platform.")
-        else:
-            typer.echo("Not authenticated. Run: vibe2prod auth login")
+@auth_app.command()
+def logout() -> None:
+    """Log out from the Vibe2Prod platform."""
+    config = _load_config()
+    config.pop("auth", None)
+    _save_config(config)
+    typer.echo("Logged out.")
+
+
+@auth_app.command("status")
+def auth_status() -> None:
+    """Check authentication status."""
+    config = _load_config()
+    if config.get("auth", {}).get("api_key"):
+        typer.echo("Authenticated with Vibe2Prod platform.")
     else:
-        typer.echo(f"Unknown action: {action}. Use: login, logout, status", err=True)
-        raise typer.Exit(1)
+        typer.echo("Not authenticated. Run: vibe2prod auth login")
 
 
-@app.command()
+@app.command(rich_help_panel="Setup & Config")
 def setup(
-    api_key: str | None = typer.Option(None, "--api-key", "-k", help="OpenRouter API key"),
+    api_key: str | None = typer.Option(None, "--api-key", "-k", help="OpenRouter API key (optional)"),
     v2p_key: str | None = typer.Option(None, "--v2p-key", help="Vibe2Prod dashboard API key"),
     no_interactive: bool = typer.Option(False, "--no-interactive", help="Headless mode (no prompts)"),
     reset: bool = typer.Option(False, "--reset", help="Re-run wizard with existing values pre-populated"),
+    share_forgeignore: bool = typer.Option(True, "--share-forgeignore/--no-share-forgeignore", help="Share anonymized .forgeignore suppression data"),
+    scope: str = typer.Option("user", "--scope", help="Claude Code MCP scope: user or project"),
     json_output: bool = typer.Option(False, "--json", "-j", help="Output result as JSON"),
 ) -> None:
     """Configure FORGE — API keys, Claude Code integration, dashboard sync.
@@ -458,6 +446,7 @@ def setup(
         vibe2prod setup
 
     Headless mode (for AI agents):
+        vibe2prod setup --no-interactive
         vibe2prod setup --api-key sk-or-... --no-interactive
 
     Reconfigure:
@@ -472,10 +461,12 @@ def setup(
     headless = no_interactive or not sys.stdin.isatty()
 
     if headless:
-        if not api_key:
-            typer.echo("Error: --api-key required in headless mode.", err=True)
-            raise typer.Exit(1)
-        result = run_headless_setup(api_key=api_key, v2p_key=v2p_key)
+        result = run_headless_setup(
+            api_key=api_key,
+            v2p_key=v2p_key,
+            share_forgeignore=share_forgeignore,
+            scope=scope,
+        )
     else:
         # --reset is implicit: interactive mode always pre-populates from existing config.
         # Running `vibe2prod setup` and `vibe2prod setup --reset` behave the same.
@@ -494,7 +485,7 @@ def setup(
     raise typer.Exit(0 if result.get("success") else 2)
 
 
-@app.command()
+@app.command(rich_help_panel="Scanning")
 def report(
     path: str = typer.Argument(..., help="Path to the repository"),
     format: str = typer.Option("text", "--format", "-f", help="Output format: text, json, html"),
@@ -513,7 +504,7 @@ def report(
 
     artifacts_dir = Path(repo_path, ".artifacts", "report")
     if not artifacts_dir.is_dir():
-        typer.echo("No report found. Run 'vibe2prod fix' first to generate a report.", err=True)
+        typer.echo("No report found. Run 'vibe2prod scan' first to generate a report.", err=True)
         raise typer.Exit(1)
 
     # Find the latest report
@@ -548,6 +539,58 @@ def report(
                     item_status = "FIXED" if item.get("fixed") else "DEFERRED"
                     typer.echo(f"    - [{item_status}] {item.get('title', '')}")
             typer.echo("")
+
+
+@app.command(rich_help_panel="Help")
+def help(
+    command: str = typer.Argument(None, help="Command to get help for"),
+) -> None:
+    """Show detailed help with examples and config locations.
+
+    Example:
+        vibe2prod help
+        vibe2prod help scan
+    """
+    from forge.help import format_top_level_help, format_command_help
+    from forge import __version__
+
+    if command is None:
+        typer.echo(format_top_level_help(__version__))
+    else:
+        output = format_command_help(command)
+        if output is None:
+            typer.echo(f"Unknown command: {command}", err=True)
+            typer.echo("Run `vibe2prod help` to see all commands.", err=True)
+            raise typer.Exit(1)
+        typer.echo(output)
+
+
+@app.command(rich_help_panel="Maintenance")
+def update(
+    check: bool = typer.Option(False, "--check", help="Dry run — show what would change without applying"),
+    force: bool = typer.Option(False, "--force", help="Force re-sync everything regardless of version"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON"),
+) -> None:
+    """Check for updates and upgrade all components.
+
+    Upgrades the pip package and syncs skills, hooks, MCP registration,
+    and config schema. Only touches what changed.
+
+    Example:
+        vibe2prod update
+        vibe2prod update --check
+        vibe2prod update --force
+    """
+    from forge.updater import run_update
+
+    if not json_output:
+        typer.echo(typer.style("vibe2prod update", bold=True))
+        typer.echo("")
+
+    result = run_update(dry_run=check, force=force, json_output=json_output)
+
+    if json_output:
+        typer.echo(json.dumps(result, indent=2))
 
 
 def main() -> None:
