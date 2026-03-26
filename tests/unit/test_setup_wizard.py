@@ -109,8 +109,10 @@ class TestRegisterMCP(unittest.TestCase):
         self.assertFalse(result)
 
     @patch("forge.setup_wizard.check_mcp_registered", return_value=True)
-    def test_register_mcp_already_registered(self, mock_check):
-        """Idempotent: skip if already registered."""
+    @patch("subprocess.run")
+    def test_register_mcp_already_registered(self, mock_run, mock_check):
+        """Re-registers even if already registered (removes first)."""
+        mock_run.return_value = MagicMock(returncode=0)
         from forge.setup_wizard import register_mcp
         result = register_mcp("sk-or-test")
         self.assertTrue(result)
@@ -264,4 +266,52 @@ class TestHeadlessSetup(unittest.TestCase):
                 from forge.setup_wizard import run_headless_setup
                 result = run_headless_setup(api_key="sk-or-test", scope="project")
                 self.assertTrue(result["success"])
-                mock_mcp.assert_called_once_with("sk-or-test", None, scope="project")
+                mock_mcp.assert_called_once_with("sk-or-test", None, scope="project", dev=False)
+
+
+class TestRegisterMCPDev(unittest.TestCase):
+
+    @patch("forge.setup_wizard.check_mcp_registered", return_value=False)
+    @patch("subprocess.run")
+    def test_register_mcp_dev_uses_staging_url(self, mock_run, mock_check):
+        """dev=True passes staging VIBE2PROD_URL in the command."""
+        mock_run.return_value = MagicMock(returncode=0)
+        from forge.setup_wizard import register_mcp
+        register_mcp("sk-or-test", dev=True)
+        cmd = mock_run.call_args[0][0]
+        assert any("VIBE2PROD_URL=https://staging.vibe2prod.verstandai.site" in str(c) for c in cmd)
+
+    @patch("forge.setup_wizard.check_mcp_registered", return_value=False)
+    @patch("subprocess.run")
+    def test_register_mcp_prod_uses_prod_url(self, mock_run, mock_check):
+        """dev=False passes production VIBE2PROD_URL in the command."""
+        mock_run.return_value = MagicMock(returncode=0)
+        from forge.setup_wizard import register_mcp
+        register_mcp("sk-or-test", dev=False)
+        cmd = mock_run.call_args[0][0]
+        assert any("VIBE2PROD_URL=https://api.vibe2prod.net" in str(c) for c in cmd)
+
+    @patch("forge.setup_wizard.check_mcp_registered", return_value=False)
+    @patch("subprocess.run")
+    def test_register_mcp_v2p_key_adds_data_sharing(self, mock_run, mock_check):
+        """v2p_key adds VIBE2PROD_DATA_SHARING=true to the command."""
+        mock_run.return_value = MagicMock(returncode=0)
+        from forge.setup_wizard import register_mcp
+        register_mcp("sk-or-test", v2p_key="v2p_test")
+        cmd = mock_run.call_args[0][0]
+        assert any("VIBE2PROD_DATA_SHARING=true" in str(c) for c in cmd)
+
+
+class TestHeadlessSetupDev(unittest.TestCase):
+
+    def test_headless_dev_passes_dev_to_mcp(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / ".vibe2prod" / "config.json"
+            with patch("forge.config_io.CONFIG_PATH", config_path), \
+                 patch("forge.setup_wizard.detect_claude_code", return_value=True), \
+                 patch("forge.setup_wizard.register_mcp", return_value=True) as mock_mcp, \
+                 patch("forge.setup_wizard.install_skill", return_value=True):
+                from forge.setup_wizard import run_headless_setup
+                result = run_headless_setup(api_key="sk-or-test", dev=True)
+                self.assertTrue(result["success"])
+                mock_mcp.assert_called_once_with("sk-or-test", None, scope="user", dev=True)

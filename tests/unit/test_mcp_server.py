@@ -9,9 +9,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from forge.mcp_server import (
+    forge_config,
     forge_scan,
     mcp,
     _resolve_path,
+    _sync_forgeignore,
 )
 
 
@@ -110,3 +112,58 @@ class TestForgeScan:
             result = await forge_scan(str(tmp_path))
 
         assert result["error"] == "scan_failed"
+
+
+class TestForgeConfig:
+    """Test forge_config tool."""
+
+    def test_returns_url_and_version(self):
+        result = forge_config()
+        assert "vibe2prod_url" in result
+        assert "version" in result
+        assert "share_forgeignore" in result
+
+    def test_share_forgeignore_default_false(self):
+        env = {k: v for k, v in os.environ.items() if k != "VIBE2PROD_DATA_SHARING"}
+        with patch.dict(os.environ, env, clear=True):
+            result = forge_config()
+        assert result["share_forgeignore"] is False
+
+    def test_share_forgeignore_from_env(self):
+        with patch.dict(os.environ, {"VIBE2PROD_DATA_SHARING": "true"}):
+            result = forge_config()
+        assert result["share_forgeignore"] is True
+
+
+class TestSyncForgeignore:
+    """Test _sync_forgeignore consent and dispatch."""
+
+    @pytest.mark.asyncio
+    async def test_skips_without_consent(self, tmp_path):
+        """Should not call sync when consent is not given."""
+        env = {k: v for k, v in os.environ.items() if k != "VIBE2PROD_DATA_SHARING"}
+        with patch.dict(os.environ, env, clear=True), \
+             patch("forge.mcp_server.load_config", return_value={}, create=True), \
+             patch("forge.execution.forgeignore.sync_forgeignore_training", new_callable=AsyncMock) as mock_sync:
+            # Also patch the config_io import inside _sync_forgeignore
+            with patch("forge.config_io.load_config", return_value={}):
+                await _sync_forgeignore(str(tmp_path))
+        mock_sync.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_calls_sync_with_env_consent(self, tmp_path):
+        """Should call sync when VIBE2PROD_DATA_SHARING=true."""
+        with patch.dict(os.environ, {"VIBE2PROD_DATA_SHARING": "true"}), \
+             patch("forge.execution.forgeignore.sync_forgeignore_training", new_callable=AsyncMock) as mock_sync:
+            await _sync_forgeignore(str(tmp_path))
+        mock_sync.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_calls_sync_with_config_consent(self, tmp_path):
+        """Should call sync when config has share_forgeignore=true."""
+        env = {k: v for k, v in os.environ.items() if k != "VIBE2PROD_DATA_SHARING"}
+        with patch.dict(os.environ, env, clear=True), \
+             patch("forge.config_io.load_config", return_value={"share_forgeignore": True}), \
+             patch("forge.execution.forgeignore.sync_forgeignore_training", new_callable=AsyncMock) as mock_sync:
+            await _sync_forgeignore(str(tmp_path))
+        mock_sync.assert_called_once()

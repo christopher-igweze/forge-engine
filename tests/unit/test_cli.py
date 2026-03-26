@@ -151,6 +151,23 @@ class TestAuthCommand:
         assert result.exit_code != 0
 
 
+class TestSetupCommand:
+    def test_setup_has_dev_flag(self):
+        """setup --help shows --dev flag."""
+        result = runner.invoke(app, ["setup", "--help"])
+        assert "--dev" in result.output
+        assert "staging" in result.output.lower()
+
+    @patch("forge.setup_wizard.run_headless_setup", return_value={"success": True})
+    def test_setup_dev_flag_passed_to_headless(self, mock_headless):
+        """--dev flag is passed through to headless setup."""
+        result = runner.invoke(app, ["setup", "--no-interactive", "--dev"])
+        assert result.exit_code == 0
+        mock_headless.assert_called_once()
+        call_kwargs = mock_headless.call_args[1]
+        assert call_kwargs["dev"] is True
+
+
 class TestScanFlags:
     def test_scan_has_max_cost_flag(self):
         """scan --help shows --max-cost flag."""
