@@ -220,8 +220,8 @@ def run_interactive_setup() -> dict:
     console.print("  Sync scan history, cross-repo trends, and team analytics.\n")
 
     v2p_key = None
-    if Confirm.ask("  Enable dashboard sync?", default=False):
-        existing_v2p = config.get("auth", {}).get("api_key", "")
+    existing_v2p = config.get("auth", {}).get("api_key", "")
+    if Confirm.ask("  Enable dashboard sync?", default=bool(existing_v2p)):
         while True:
             v2p_key = Prompt.ask(
                 "  Vibe2Prod API key",
@@ -236,7 +236,8 @@ def run_interactive_setup() -> dict:
     console.print("\n[bold]Step 3/6 — Data Sharing[/bold]")
     console.print("  Help improve FORGE by sharing anonymized .forgeignore suppression data after scans.")
     console.print("  This shares suppression patterns and reasoning only — no code, file paths, or repo names.\n")
-    share = Confirm.ask("  Share anonymized suppression data?", default=False)
+    existing_share = config.get("share_forgeignore", False)
+    share = Confirm.ask("  Share anonymized suppression data?", default=existing_share)
 
     # Step 4/6: Claude Code Integration
     console.print("\n[bold]Step 4/6 — Claude Code Integration[/bold]")
