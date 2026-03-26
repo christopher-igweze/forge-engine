@@ -1,6 +1,6 @@
 [project]
 name = "vibe2prod"
-version = "1.0.0"
+version = "1.2.0"
 description = "AI-powered code audit and remediation. Turns vibe-coded MVPs into production-ready software."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -39,7 +39,7 @@ build-backend = "setuptools.build_meta"
 include = ["forge*"]
 
 [tool.setuptools.package-data]
-forge = ["skills/forge/SKILL.md"]
+forge = ["skills/*/SKILL.md", "manifest.json", "rules/**/*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
