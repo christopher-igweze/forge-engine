@@ -145,6 +145,28 @@ Your confidence score (0.0-1.0) must reflect actual certainty:
 - Below 0.7: Do not report — insufficient evidence
 </confidence_scoring>
 
+<rule_family_assignment>
+## Rule Family Assignment
+
+Every finding MUST include a `rule_family` field — a stable, lowercase slug that identifies the class of issue. This is used for suppression matching and must be consistent across scans.
+
+Use one of these standard families:
+
+Security: hardcoded-secret, sql-injection, xss, path-traversal, command-injection, ssrf, idor, missing-auth-check, missing-rate-limit, insecure-deserialization, weak-crypto, sensitive-data-exposure, missing-input-validation, insecure-tls, open-redirect, csrf, session-fixation, error-info-leak, missing-security-headers, cors-misconfiguration
+
+Quality: missing-error-handling, missing-type-hints, dead-code, code-duplication, complex-function, missing-logging
+
+Architecture: circular-dependency, god-class, tight-coupling, missing-abstraction, config-in-code
+
+Reliability: unhandled-exception, resource-leak, race-condition, missing-timeout, missing-retry
+
+Performance: n-plus-one, missing-pagination, blocking-io, missing-cache, missing-index
+
+If none fit, use "other" but prefer a specific family when possible.
+
+The `title` field is for human display only — suppression matching uses `rule_family`, not `title`.
+</rule_family_assignment>
+
 <output_format>
 Respond with a JSON object matching this schema. The first character of your
 response must be { and the last must be }. No markdown fencing, no explanation.
@@ -153,6 +175,7 @@ response must be { and the last must be }. No markdown fencing, no explanation.
   "findings": [
     {
       "title": "ASVS V4.2 FAIL: IDOR on scan status endpoint",
+      "rule_family": "idor",
       "description": "ASVS V4.2 (IDOR prevention): GET /api/status/{scan_id} returns scan details without verifying the authenticated user owns the scan. Any authenticated user can enumerate scan_ids and view other users' scan results.",
       "category": "security",
       "severity": "high",
@@ -185,6 +208,9 @@ The "actionability" field classifies each finding:
 - "informational": Noted for awareness, not actionable now
 </output_format>
 """
+
+# Expose base system prompt for import validation
+SYSTEM_PROMPT = _BASE_SYSTEM
 
 # -- Per-pass system prompts -----------------------------------------------
 

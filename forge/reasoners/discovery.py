@@ -86,11 +86,69 @@ _CATEGORY_ALIASES: dict[str, str] = {
 }
 
 
+def _infer_rule_family(finding: dict) -> str:
+    """Infer rule_family from finding title/description if not explicitly set.
+
+    This is a fallback for when the LLM doesn't output rule_family.
+    Uses keyword matching on title and description.
+    """
+    title = (finding.get("title") or "").lower()
+    desc = (finding.get("description") or "").lower()
+    text = f"{title} {desc}"
+
+    # Map keywords to rule families (order matters — more specific first)
+    KEYWORD_MAP = [
+        (["hardcoded", "secret", "credential", "api key", "token", "password"], "hardcoded-secret"),
+        (["sql injection", "sql concat", "parameterized"], "sql-injection"),
+        (["xss", "cross-site scripting", "unescaped", "unsanitized html"], "xss"),
+        (["path traversal", "directory traversal", "../"], "path-traversal"),
+        (["command injection", "os.system", "subprocess", "shell injection"], "command-injection"),
+        (["ssrf", "server-side request"], "ssrf"),
+        (["idor", "insecure direct object", "ownership check", "authorization check"], "idor"),
+        (["missing auth", "no authentication", "unauthenticated"], "missing-auth-check"),
+        (["rate limit", "throttl", "brute force"], "missing-rate-limit"),
+        (["deserializ", "pickle", "yaml.load", "unsafe load"], "insecure-deserialization"),
+        (["weak crypto", "md5", "sha1", "deprecated algorithm"], "weak-crypto"),
+        (["sensitive data", "pii", "data exposure", "data leak"], "sensitive-data-exposure"),
+        (["input validation", "missing validation", "unvalidated"], "missing-input-validation"),
+        (["tls", "ssl", "certificate", "https"], "insecure-tls"),
+        (["open redirect", "redirect"], "open-redirect"),
+        (["csrf", "cross-site request"], "csrf"),
+        (["session fixation", "session token"], "session-fixation"),
+        (["error info", "stack trace", "debug info", "internal error"], "error-info-leak"),
+        (["security header", "csp", "hsts", "x-frame"], "missing-security-headers"),
+        (["cors", "access-control-allow"], "cors-misconfiguration"),
+        (["error handling", "try/catch", "try-catch", "exception handling"], "missing-error-handling"),
+        (["type hint", "type annotation"], "missing-type-hints"),
+        (["dead code", "unreachable", "unused"], "dead-code"),
+        (["duplicat", "code duplication", "repeated"], "code-duplication"),
+        (["complex", "cyclomatic", "too long"], "complex-function"),
+        (["logging", "log", "observability"], "missing-logging"),
+        (["circular", "import cycle"], "circular-dependency"),
+        (["god class", "too many responsibilit"], "god-class"),
+        (["tight coupling", "tightly coupled"], "tight-coupling"),
+        (["n+1", "n plus one"], "n-plus-one"),
+        (["pagination", "unbounded query"], "missing-pagination"),
+        (["blocking", "sync in async"], "blocking-io"),
+        (["timeout", "no timeout"], "missing-timeout"),
+        (["retry", "no retry"], "missing-retry"),
+        (["resource leak", "file handle", "connection leak"], "resource-leak"),
+        (["race condition", "concurrent"], "race-condition"),
+    ]
+
+    for keywords, family in KEYWORD_MAP:
+        if any(kw in text for kw in keywords):
+            return family
+
+    return "other"
+
+
 def _normalize_finding(f_data: dict) -> dict:
     """Normalize LLM-returned finding data before Pydantic validation.
 
     - Maps category aliases to valid FindingCategory enum values
     - Ensures severity is lowercase
+    - Infers rule_family if not set
     """
     cat = f_data.get("category", "")
     if isinstance(cat, str):
@@ -100,6 +158,11 @@ def _normalize_finding(f_data: dict) -> dict:
     sev = f_data.get("severity", "")
     if isinstance(sev, str):
         f_data["severity"] = sev.lower().strip()
+
+    # Infer rule_family if not set
+    if not f_data.get("rule_family"):
+        f_data["rule_family"] = _infer_rule_family(f_data)
+
     return f_data
 
 

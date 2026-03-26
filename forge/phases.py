@@ -415,6 +415,31 @@ async def _run_discovery(
 
     emit_phase_complete(cfg, "actionability", "Actionability classification complete.")
 
+    # ── Post-discovery normalization: generate stable anchors ────────────
+    def _normalize_finding_anchors(finding_dict: dict, repo_path: str) -> None:
+        """Add evidence_hash and enclosing_symbol to a finding for suppression durability."""
+        locations = finding_dict.get("locations", [])
+        if not locations:
+            return
+
+        primary_loc = locations[0]
+        file_path = primary_loc.get("file_path", "")
+        snippet = primary_loc.get("snippet", "")
+        line_start = primary_loc.get("line_start", 0)
+
+        # Resolve relative path to absolute for symbol detection
+        abs_path = os.path.join(repo_path, file_path) if not os.path.isabs(file_path) else file_path
+
+        # Generate evidence hash from snippet
+        if snippet and not finding_dict.get("evidence_hash"):
+            from forge.execution.fingerprint import compute_evidence_hash
+            finding_dict["evidence_hash"] = compute_evidence_hash(snippet)
+
+        # Detect enclosing symbol
+        if line_start and not finding_dict.get("enclosing_symbol"):
+            from forge.execution.fingerprint import detect_enclosing_symbol
+            finding_dict["enclosing_symbol"] = detect_enclosing_symbol(abs_path, line_start)
+
     # ── Fingerprint, Baseline, Suppression, Severity ─────────────────
     findings_delta: dict = {}
     quality_gate_result: dict = {}
@@ -430,6 +455,10 @@ async def _run_discovery(
 
             # Convert AuditFinding models to dicts for processing
             findings_dicts = [f.model_dump(mode="json") for f in state.all_findings]
+
+            # Normalize anchors for all findings
+            for f_dict in findings_dicts:
+                _normalize_finding_anchors(f_dict, state.repo_path)
 
             # Generate fingerprints
             for fd in findings_dicts:
