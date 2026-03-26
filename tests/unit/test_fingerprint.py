@@ -1,6 +1,16 @@
 """Tests for finding fingerprint generation."""
+import os
+import tempfile
+
 import pytest
-from forge.execution.fingerprint import fingerprint, _normalize_title, find_match, _title_similarity
+from forge.execution.fingerprint import (
+    fingerprint,
+    _normalize_title,
+    find_match,
+    _title_similarity,
+    compute_evidence_hash,
+    detect_enclosing_symbol,
+)
 
 
 class TestNormalizeTitle:
@@ -262,3 +272,141 @@ class TestFindMatch:
     def test_empty_baseline_returns_none(self):
         finding = {"title": "Some finding", "category": "security"}
         assert find_match(finding, {}) is None
+
+
+class TestRuleFamilyFingerprint:
+    def test_rule_family_used_when_present(self):
+        """When rule_family is set, it should be used instead of title."""
+        f1 = {
+            "title": "SQL injection via repo_url parameter",
+            "rule_family": "sql-injection",
+            "category": "security",
+            "locations": [{"file_path": "api.py", "line_start": 42}],
+        }
+        f2 = {
+            "title": "SQL injection through user input concatenation",
+            "rule_family": "sql-injection",
+            "category": "security",
+            "locations": [{"file_path": "api.py", "line_start": 42}],
+        }
+        # Different titles but same rule_family => same fingerprint
+        assert fingerprint(f1) == fingerprint(f2)
+
+    def test_falls_back_to_title_when_rule_family_empty(self):
+        """When rule_family is empty, title is used as before."""
+        f1 = {
+            "title": "SQL injection via repo_url",
+            "rule_family": "",
+            "category": "security",
+            "locations": [{"file_path": "api.py", "line_start": 42}],
+        }
+        f2 = {
+            "title": "SQL injection via repo_url",
+            "category": "security",
+            "locations": [{"file_path": "api.py", "line_start": 42}],
+        }
+        # No rule_family in either => both use normalized title
+        assert fingerprint(f1) == fingerprint(f2)
+
+    def test_different_rule_family_different_fingerprint(self):
+        f1 = {
+            "title": "Injection issue",
+            "rule_family": "sql-injection",
+            "category": "security",
+            "locations": [{"file_path": "api.py", "line_start": 42}],
+        }
+        f2 = {
+            "title": "Injection issue",
+            "rule_family": "command-injection",
+            "category": "security",
+            "locations": [{"file_path": "api.py", "line_start": 42}],
+        }
+        assert fingerprint(f1) != fingerprint(f2)
+
+
+class TestComputeEvidenceHash:
+    def test_empty_snippet(self):
+        assert compute_evidence_hash("") == ""
+
+    def test_whitespace_only(self):
+        assert compute_evidence_hash("   ") == ""
+
+    def test_comment_only(self):
+        assert compute_evidence_hash("# just a comment") == ""
+
+    def test_normalizes_whitespace(self):
+        h1 = compute_evidence_hash("x = 1")
+        h2 = compute_evidence_hash("x  =  1")
+        assert h1 == h2
+
+    def test_strips_python_comments(self):
+        h1 = compute_evidence_hash("x = 1")
+        h2 = compute_evidence_hash("x = 1  # set x")
+        assert h1 == h2
+
+    def test_strips_js_comments(self):
+        h1 = compute_evidence_hash("const x = 1")
+        h2 = compute_evidence_hash("const x = 1  // set x")
+        assert h1 == h2
+
+    def test_case_insensitive(self):
+        h1 = compute_evidence_hash("X = 1")
+        h2 = compute_evidence_hash("x = 1")
+        assert h1 == h2
+
+    def test_returns_12_chars(self):
+        result = compute_evidence_hash("x = 1")
+        assert len(result) == 12
+
+    def test_different_code_different_hash(self):
+        h1 = compute_evidence_hash("x = 1")
+        h2 = compute_evidence_hash("y = 2")
+        assert h1 != h2
+
+
+class TestDetectEnclosingSymbol:
+    def test_finds_python_function(self):
+        code = "def foo():\n    x = 1\n    return x\n"
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+            f.write(code)
+            f.flush()
+            result = detect_enclosing_symbol(f.name, 2)
+            assert result == "foo"
+        os.unlink(f.name)
+
+    def test_finds_python_class(self):
+        code = "class MyClass:\n    def method(self):\n        pass\n"
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+            f.write(code)
+            f.flush()
+            # Line 3 is inside method, should find "method"
+            result = detect_enclosing_symbol(f.name, 3)
+            assert result == "method"
+        os.unlink(f.name)
+
+    def test_finds_async_def(self):
+        code = "async def handler():\n    await do_thing()\n"
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+            f.write(code)
+            f.flush()
+            result = detect_enclosing_symbol(f.name, 2)
+            assert result == "handler"
+        os.unlink(f.name)
+
+    def test_returns_empty_for_nonexistent_file(self):
+        assert detect_enclosing_symbol("/nonexistent/file.py", 1) == ""
+
+    def test_returns_empty_for_empty_path(self):
+        assert detect_enclosing_symbol("", 1) == ""
+
+    def test_returns_empty_for_zero_line(self):
+        assert detect_enclosing_symbol("/some/file.py", 0) == ""
+
+    def test_returns_empty_when_no_symbol_found(self):
+        code = "x = 1\ny = 2\n"
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+            f.write(code)
+            f.flush()
+            result = detect_enclosing_symbol(f.name, 1)
+            assert result == ""
+        os.unlink(f.name)
