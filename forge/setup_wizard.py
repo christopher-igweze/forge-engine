@@ -65,10 +65,17 @@ def check_mcp_registered() -> bool:
 
 def register_mcp(api_key: str, v2p_key: str | None = None, scope: str = "user") -> bool:
     """Register FORGE MCP server with Claude Code.
-    Skips if already registered (idempotent).
+    Removes existing registration first to ensure env vars are up to date.
     """
+    # Remove existing registration to ensure fresh env vars
     if check_mcp_registered():
-        return True  # Already registered
+        try:
+            subprocess.run(
+                ["claude", "mcp", "remove", "forge"],
+                capture_output=True, text=True, timeout=10,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
     cmd = [
         "claude", "mcp", "add", "--scope", scope,
         "forge",
@@ -97,7 +104,7 @@ def install_skill(skill_name: str = "forge") -> bool:
 
 # ── Config I/O (delegates to shared config_io) ─────────────────────
 
-from forge.config_io import load_config as _load_config, save_config as _save_config
+from forge.config_io import load_config as _load_config, save_config as _save_config, validate_config as _validate_config
 
 
 # ── Headless Mode ───────────────────────────────────────────────────
@@ -139,6 +146,13 @@ def run_headless_setup(
             for skill_name in ("forge", "forgeignore"):
                 install_skill(skill_name)
     config["claude_code_integrated"] = claude_integrated
+
+    # Clean unknown keys from config
+    warnings = _validate_config(config)
+    for w in warnings:
+        if w.startswith("Unknown config key:"):
+            stale_key = w.split("'")[1]
+            config.pop(stale_key, None)
 
     _save_config(config)
 
@@ -267,6 +281,13 @@ def run_interactive_setup() -> dict:
         config["data_sharing"] = True
     else:
         config["data_sharing"] = config.get("data_sharing", False)
+
+    # Clean unknown keys from config
+    warnings = _validate_config(config)
+    for w in warnings:
+        if w.startswith("Unknown config key:"):
+            stale_key = w.split("'")[1]
+            config.pop(stale_key, None)
 
     _save_config(config)
 
