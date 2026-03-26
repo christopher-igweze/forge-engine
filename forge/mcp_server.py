@@ -163,15 +163,8 @@ async def forge_scan(path: str, model: str | None = None) -> dict:
     Returns:
         Complete scan report with findings, scores, and suggestions.
     """
-    if not os.environ.get("OPENROUTER_API_KEY"):
-        return {
-            "error": "OPENROUTER_API_KEY not set",
-            "message": (
-                "Add your OpenRouter API key when registering the MCP server:\n\n"
-                "  claude mcp add forge -e OPENROUTER_API_KEY=your-key -- python -m forge.mcp_server\n\n"
-                "Get a key at https://openrouter.ai (free signup)."
-            ),
-        }
+    # No API key check — pipeline handles graceful degradation internally.
+    # Without a key, scan runs in deterministic-only mode (Opengrep + evaluation).
 
     try:
         from forge.standalone import run_standalone
