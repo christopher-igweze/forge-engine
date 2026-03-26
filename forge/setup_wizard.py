@@ -196,14 +196,19 @@ def run_interactive_setup() -> dict:
     if existing_key:
         masked = existing_key[:6] + "****" + existing_key[-4:] if len(existing_key) > 10 else "****"
         console.print(f"  Existing key detected: {masked}")
+        console.print("  Press Enter to keep it, or paste a new key.\n")
 
     api_key = ""
     while True:
         raw = Prompt.ask(
             "  OpenRouter API key",
-            default=existing_key or "",
-            password=True,
+            default=masked if existing_key else "",
+            password=False if existing_key else True,
         )
+        # User pressed Enter to keep existing key
+        if existing_key and (not raw or raw == masked):
+            api_key = existing_key
+            break
         if not raw or raw.strip() == "":
             api_key = ""
             console.print("  Running in deterministic-only mode. Opengrep, scoring, quality gate,")
@@ -222,12 +227,19 @@ def run_interactive_setup() -> dict:
     v2p_key = None
     existing_v2p = config.get("auth", {}).get("api_key", "")
     if Confirm.ask("  Enable dashboard sync?", default=bool(existing_v2p)):
+        if existing_v2p:
+            masked_v2p = existing_v2p[:4] + "****" + existing_v2p[-4:] if len(existing_v2p) > 8 else "****"
+            console.print(f"  Existing key detected: {masked_v2p}")
+            console.print("  Press Enter to keep it, or paste a new key.\n")
         while True:
             v2p_key = Prompt.ask(
                 "  Vibe2Prod API key",
-                default=existing_v2p or None,
-                password=True,
+                default=masked_v2p if existing_v2p else None,
             )
+            # User pressed Enter to keep existing key
+            if existing_v2p and v2p_key == masked_v2p:
+                v2p_key = existing_v2p
+                break
             if validate_v2p_key(v2p_key or ""):
                 break
             console.print("  [red]Invalid format. Key must start with 'v2p_'.[/red]")
