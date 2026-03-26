@@ -1,115 +1,96 @@
 ---
 name: forge
-description: Fix security, quality, and architecture issues from a FORGE scan report. Use after running forge_scan via MCP.
-argument-hint: (no arguments needed — reads the scan report automatically)
+description: Full FORGE audit cycle — scan, triage false positives, fix real issues, verify. Use after running forge_scan via MCP or as a standalone workflow.
+argument-hint: (no arguments needed — scans and reads reports automatically)
 ---
 
-# FORGE — Fix Issues from Scan Report
+# FORGE — Audit, Triage, Fix, Verify
 
-You have a FORGE scan report with security, quality, and architecture findings. Your job is to fix them — or register them in the suppression register if they're false positives.
+You are running the full FORGE audit cycle. Follow these 6 steps in order.
 
-## Setup
+## Step 1: Scan
 
-The scan report is in `.artifacts/report/discovery_report.json`. If it doesn't exist, tell the user to run `forge_scan(path=".")` first via the FORGE MCP tool.
+Run the FORGE scan on the current project:
+- Call `forge_scan(path=".")` via the FORGE MCP tool
+- Wait for the scan to complete
+- If the scan fails, report the error and stop
 
-## Process
+## Step 2: Triage
 
-1. **Read the report** — Read `.artifacts/report/discovery_report.json` and parse the findings
-2. **Read the suppression register** — Read `.forgeignore` to understand what's already been assessed
-3. **Prioritize** — Sort by severity: critical > high > medium > low. Skip `info`.
-4. **For each finding, decide: FIX or SUPPRESS**
-   - If it's a real issue → fix it (see Decision Rules below)
-   - If it's a false positive → register it in `.forgeignore` (see Suppression Register below)
-5. **Spin up parallel agents** — Use the Agent tool to fix independent findings in parallel:
+Evaluate each finding — is it real or a false positive?
+
+1. Read the report from `.artifacts/report/discovery_report.json`
+2. Read existing `.forgeignore` if it exists
+3. For each finding, assess:
+   - **Real issue** — needs to be fixed
+   - **False positive** — scanner misidentified code
+   - **Not applicable** — check doesn't apply to this project type
+   - **Accepted risk** — known limitation with documented mitigation
+   - **Intentional** — feature that looks like a vulnerability by design
+   - **Test fixture** — intentionally vulnerable test code
+4. Present your assessment grouped:
+   - "These are real issues that should be fixed: [list]"
+   - "These appear to be false positives: [list with reasoning]"
+   - "These need your decision: [list]"
+5. **Wait for user confirmation before proceeding**
+
+## Step 3: Update .forgeignore
+
+For confirmed false positives, invoke the `/forgeignore` skill to register them properly.
+
+Do NOT proceed to fixing until the user has confirmed the triage assessment.
+
+## Step 4: Fix Real Issues
+
+Apply fixes for confirmed real findings:
+
+1. Sort by severity: critical > high > medium > low. Skip `info`.
+2. Use the Agent tool to fix independent findings in parallel:
    - Group findings by file — fixes to the same file go to one agent
    - Independent files can be fixed simultaneously
-6. **For each fix:**
-   - Read the affected file(s) listed in `locations`
-   - Apply the fix described in `suggested_fix`
-   - Match the existing code style exactly
+3. For each fix:
+   - Read the affected file(s)
+   - Apply the fix described in `suggested_fix` from the report
+   - Match existing code style
    - Run tests if they exist (`pytest`, `npm test`, etc.)
-7. **Re-scan** — Run `forge_scan(path=".")` again to verify improvements
-8. **Report** — Show before/after: findings count, readiness score, what was fixed vs suppressed
+4. Commit micro-steps with descriptive messages
 
-## Decision Rules
+**Decision Rules:**
 
-**Auto-fix (do it):**
-- Missing error handling → add try/catch
-- Missing input validation → add validation
+Auto-fix (do it):
+- Missing error handling, input validation
 - Hardcoded secrets → move to env vars
-- Missing rate limiting → add middleware
-- SQL injection → use parameterized queries
-- Missing auth checks → add middleware
-- Error information exposure → return generic messages
-- Missing type hints → add types
+- Missing rate limiting, auth checks
+- SQL injection → parameterized queries
+- Error information exposure → generic messages
 
-**Flag for human (ask first):**
-- Architectural restructuring (splitting modules)
-- Breaking API changes (function signatures, endpoints)
-- Dependency upgrades (version bumps)
+Flag for human (ask first):
+- Architectural restructuring
+- Breaking API changes
+- Dependency upgrades
 - Business logic changes
-- Anything that changes external behavior
 
-**Register as suppression (don't fix):**
-- Scanner detecting its own detection patterns (e.g., security check code flagged as insecure)
-- Checks that don't apply to the project type (e.g., health endpoints for CLI tools, DB checks for file-based tools)
-- Findings in test fixtures that are intentionally vulnerable
-- Already-fixed issues where the pattern still triggers the detector
-- Accepted risks with documented mitigations
+## Step 5: Rescan
 
-## Suppression Register (.forgeignore)
+Run `forge_scan(path=".")` again to verify improvements:
+- Compare before/after scores
+- Confirm fixed findings are resolved
+- Check for regressions (new findings introduced by fixes)
+- If regressions found, fix them and rescan
 
-The `.forgeignore` file is the suppression register. It's a YAML list where every entry is a documented decision NOT to fix something. **No silent suppressions** — every entry must explain itself.
+## Step 6: Discuss
 
-### Required fields
-
-Every `.forgeignore` entry MUST have:
-- **`type`**: The category of suppression. One of:
-  - `false_positive` — Scanner misidentifies code (e.g., detecting its own patterns)
-  - `not_applicable` — Check doesn't apply to this project type
-  - `already_fixed` — Code was fixed but pattern still triggers
-  - `accepted_risk` — Known limitation with documented mitigation
-  - `intentional` — Feature that looks like a vulnerability by design
-  - `test_fixture` — Intentionally vulnerable test code
-- **`reason`**: A clear explanation of WHY this is suppressed, not just WHAT
-- At least one **matcher**: `check_id`, `pattern`, or `path`
-
-### Entry format
-
-```yaml
-# What: SEC-001 flags remediation_items.py which contains the string "hardcoded secrets"
-# as a check template name, not actual secrets.
-# Added: 2026-03-23
-- check_id: "SEC-001"
-  type: "false_positive"
-  reason: "Template text referencing 'hardcoded secrets' as a check name, not actual secrets in code."
-```
-
-### Matcher types
-
-- `check_id: "SEC-001"` — Suppresses a specific deterministic check by ID
-- `pattern: "regex"` — Suppresses LLM findings whose title matches the regex
-- `path: "forge/**/file.py"` — Narrows the match to specific files (glob syntax)
-
-### Optional fields
-
-- `category: "security"` — Only suppress findings in this category
-- `max_severity: "medium"` — Only suppress at or below this severity
-- `expires: "2026-06-01"` — Auto-expire after this date (forces re-evaluation)
-
-### Rules for managing the register
-
-1. **NEVER add an entry without a `reason` and `type`** — the parser rejects them
-2. **Prefer fixing over suppressing** — only suppress if the finding genuinely cannot or should not be fixed
-3. **Group entries by category** with section headers for readability
-4. **Review quarterly** — remove entries for code that's been deleted or checks that no longer trigger
-5. **Add dates** in comments so reviewers know when decisions were made
-6. **Be specific** — use `check_id` for deterministic checks, `pattern` for LLM findings
+Present results to the user:
+- **Before/after comparison**: score, finding count, quality gate status
+- **What was fixed**: list of resolved findings
+- **What was suppressed**: list of .forgeignore entries added
+- **Remaining**: any findings that still need human decision
+- **Recommendations**: next steps, areas to watch
 
 ## Constraints
 
 - Don't add dependencies unless absolutely necessary
 - Run existing tests after each fix to catch regressions
-- If a fix is complex, do it in small steps and verify each one
+- Every finding must be either FIXED or REGISTERED in .forgeignore — never silently ignored
 - Commit micro-steps with descriptive messages
-- Every finding must be either FIXED or REGISTERED — never silently ignored
+- If a fix is complex, do it in small steps and verify each one
