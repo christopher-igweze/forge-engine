@@ -63,14 +63,14 @@ def check_mcp_registered() -> bool:
         return False
 
 
-def register_mcp(api_key: str, v2p_key: str | None = None) -> bool:
-    """Register FORGE MCP server with Claude Code (user-level scope).
+def register_mcp(api_key: str, v2p_key: str | None = None, scope: str = "user") -> bool:
+    """Register FORGE MCP server with Claude Code.
     Skips if already registered (idempotent).
     """
     if check_mcp_registered():
         return True  # Already registered
     cmd = [
-        "claude", "mcp", "add", "--scope", "user",
+        "claude", "mcp", "add", "--scope", scope,
         "forge",
         "-e", f"OPENROUTER_API_KEY={api_key}",
     ]
@@ -84,17 +84,12 @@ def register_mcp(api_key: str, v2p_key: str | None = None) -> bool:
         return False
 
 
-def _skill_src_path() -> Path:
-    """Return path to SKILL.md source (mockable for testing)."""
-    return Path(__file__).parent / "skills" / "forge" / "SKILL.md"
-
-
-def install_skill() -> bool:
-    """Copy /forge skill to Claude Code commands directory."""
-    skill_src = _skill_src_path()
+def install_skill(skill_name: str = "forge") -> bool:
+    """Copy a skill to Claude Code commands directory."""
+    skill_src = Path(__file__).parent / "skills" / skill_name / "SKILL.md"
     if not skill_src.exists():
         return False
-    skill_dst = _home_dir() / ".claude" / "commands" / "forge.md"
+    skill_dst = _home_dir() / ".claude" / "commands" / f"{skill_name}.md"
     skill_dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(skill_src, skill_dst)
     return skill_dst.exists()
@@ -109,20 +104,26 @@ from forge.config_io import load_config as _load_config, save_config as _save_co
 
 
 def run_headless_setup(
-    api_key: str,
+    api_key: str | None = None,
     v2p_key: str | None = None,
     skip_claude: bool = False,
+    share_forgeignore: bool = True,
+    scope: str = "user",
 ) -> dict:
-    """Run setup in headless mode (no prompts). Returns status dict."""
-    if not validate_api_key(api_key):
+    """Run setup in headless mode (no prompts). Returns status dict.
+
+    API key is optional — omitting it enables deterministic-only mode.
+    """
+    if api_key and not validate_api_key(api_key):
         return {"success": False, "error": "Invalid API key format. Must start with 'sk-or-'."}
 
     if v2p_key and not validate_v2p_key(v2p_key):
         return {"success": False, "error": "Invalid V2P key format. Must start with 'v2p_'."}
 
     config = _load_config()
-    config["openrouter_api_key"] = api_key
+    config["openrouter_api_key"] = api_key or ""
     config["setup_completed"] = True
+    config["share_forgeignore"] = share_forgeignore
 
     if v2p_key:
         config.setdefault("auth", {})["api_key"] = v2p_key
@@ -133,9 +134,10 @@ def run_headless_setup(
     # Claude Code integration
     claude_integrated = False
     if not skip_claude and detect_claude_code():
-        claude_integrated = register_mcp(api_key, v2p_key)
+        claude_integrated = register_mcp(api_key or "", v2p_key, scope=scope)
         if claude_integrated:
-            install_skill()
+            for skill_name in ("forge", "forgeignore"):
+                install_skill(skill_name)
     config["claude_code_integrated"] = claude_integrated
 
     _save_config(config)
@@ -171,27 +173,36 @@ def run_interactive_setup() -> dict:
         border_style="blue",
     ))
 
-    # Step 1/4: OpenRouter API Key
-    console.print("\n[bold]Step 1/4 — OpenRouter API Key[/bold] (required)")
-    console.print("Get yours at: https://openrouter.ai/keys\n")
+    # Step 1/6: OpenRouter API Key (now optional)
+    console.print("\n[bold]Step 1/6 — OpenRouter API Key[/bold] (optional)")
+    console.print("  Enter your OpenRouter API key (press Enter to skip for deterministic-only mode)")
+    console.print("  Get yours at: https://openrouter.ai/keys\n")
 
     existing_key = config.get("openrouter_api_key") or os.getenv("OPENROUTER_API_KEY", "")
     if existing_key:
         masked = existing_key[:6] + "****" + existing_key[-4:] if len(existing_key) > 10 else "****"
         console.print(f"  Existing key detected: {masked}")
 
+    api_key = ""
     while True:
-        api_key = Prompt.ask(
+        raw = Prompt.ask(
             "  OpenRouter API key",
-            default=existing_key or None,
+            default=existing_key or "",
             password=True,
         )
-        if validate_api_key(api_key):
+        if not raw or raw.strip() == "":
+            api_key = ""
+            console.print("  Running in deterministic-only mode. Opengrep, scoring, quality gate,")
+            console.print("  and compliance checks all work without a key.")
+            console.print("  Add one later: vibe2prod config set openrouter_api_key sk-or-...")
             break
-        console.print("  [red]Invalid format. Key must start with 'sk-or-'.[/red]")
+        if validate_api_key(raw):
+            api_key = raw
+            break
+        console.print("  [red]Invalid format. Key must start with 'sk-or-'. Press Enter to skip.[/red]")
 
-    # Step 2/4: Vibe2Prod Dashboard (optional)
-    console.print("\n[bold]Step 2/4 — Vibe2Prod Dashboard[/bold] (optional)")
+    # Step 2/6: Vibe2Prod Dashboard (optional)
+    console.print("\n[bold]Step 2/6 — Vibe2Prod Dashboard[/bold] (optional)")
     console.print("  Sync scan history, cross-repo trends, and team analytics.\n")
 
     v2p_key = None
@@ -207,27 +218,41 @@ def run_interactive_setup() -> dict:
                 break
             console.print("  [red]Invalid format. Key must start with 'v2p_'.[/red]")
 
-    # Step 3/4: Claude Code Integration
-    console.print("\n[bold]Step 3/4 — Claude Code Integration[/bold]")
+    # Step 3/6: Data Sharing Consent
+    console.print("\n[bold]Step 3/6 — Data Sharing[/bold]")
+    console.print("  Help improve FORGE by sharing anonymized .forgeignore suppression data after scans.")
+    console.print("  This shares suppression patterns and reasoning only — no code, file paths, or repo names.\n")
+    share = Confirm.ask("  Share anonymized suppression data?", default=False)
+
+    # Step 4/6: Claude Code Integration
+    console.print("\n[bold]Step 4/6 — Claude Code Integration[/bold]")
 
     claude_integrated = False
+    scope = "user"
     if detect_claude_code():
         console.print("  [green]Claude Code detected![/green]")
-        if Confirm.ask("  Register FORGE as MCP server + install /forge skill?", default=True):
+        if Confirm.ask("  Register FORGE as MCP server + install skills?", default=True):
+            scope = Prompt.ask(
+                "  Register for all projects (user) or just this one (project)?",
+                choices=["user", "project"],
+                default="user",
+            )
             with console.status("  Registering MCP server..."):
-                mcp_ok = register_mcp(api_key, v2p_key)
+                mcp_ok = register_mcp(api_key, v2p_key, scope=scope)
             if mcp_ok:
-                console.print("  [green]✓[/green] MCP server registered (user scope)")
+                console.print(f"  [green]✓[/green] MCP server registered ({scope} scope)")
                 claude_integrated = True
             else:
                 console.print("  [yellow]⚠[/yellow] MCP registration failed. Register manually:")
-                console.print(f"    claude mcp add --scope user forge -e OPENROUTER_API_KEY={api_key[:6]}**** -- forge-mcp")
+                masked_cmd_key = api_key[:6] + "****" if api_key else "<your-key>"
+                console.print(f"    claude mcp add --scope {scope} forge -e OPENROUTER_API_KEY={masked_cmd_key} -- forge-mcp")
 
-            skill_ok = install_skill()
-            if skill_ok:
-                console.print("  [green]✓[/green] /forge skill installed")
-            else:
-                console.print("  [yellow]⚠[/yellow] Skill install failed (skill file not found in package)")
+            for skill_name in ("forge", "forgeignore"):
+                ok = install_skill(skill_name)
+                if ok:
+                    console.print(f"  [green]✓[/green] /{skill_name} skill installed")
+                else:
+                    console.print(f"  [yellow]⚠[/yellow] /{skill_name} skill install failed (skill file not found in package)")
     else:
         console.print("  Claude Code not detected. You can use FORGE via CLI directly:")
         console.print("    vibe2prod scan ./your-project")
@@ -236,6 +261,7 @@ def run_interactive_setup() -> dict:
     config["openrouter_api_key"] = api_key
     config["setup_completed"] = True
     config["claude_code_integrated"] = claude_integrated
+    config["share_forgeignore"] = share
     if v2p_key:
         config.setdefault("auth", {})["api_key"] = v2p_key
         config["data_sharing"] = True
@@ -244,13 +270,33 @@ def run_interactive_setup() -> dict:
 
     _save_config(config)
 
-    # Step 4/4: Summary
-    console.print("\n[bold]Step 4/4 — Summary[/bold]")
-    masked_key = api_key[:6] + "****"
+    # Step 5/6: Getting Started
+    console.print("\n[bold]Step 5/6 — Getting Started[/bold]")
+    if claude_integrated:
+        console.print("  You're set! Open any project and ask Claude to scan it,")
+        console.print("  or type /forge to run the full audit flow.")
+    else:
+        console.print(
+            "  Quick start:\n"
+            "    vibe2prod scan ./my-app          # Scan and get findings + remediation plan\n"
+            "    vibe2prod report ./my-app        # View last scan report\n"
+            "    vibe2prod status ./my-app        # Check running scan progress\n"
+            "\n"
+            "  Works with or without an API key. Without a key, you get Opengrep SAST\n"
+            "  + deterministic scoring. With a key, you also get LLM-powered analysis.\n"
+            "\n"
+            "  Manage .forgeignore manually to suppress false positives.\n"
+            "  See: https://docs.vibe2prod.net/forgeignore"
+        )
+
+    # Step 6/6: Summary
+    console.print("\n[bold]Step 6/6 — Summary[/bold]")
+    masked_key = (api_key[:6] + "****") if api_key else "Not set (deterministic-only)"
     console.print(Panel(
         f"  API Key:        {masked_key}\n"
         f"  Dashboard:      {'Enabled' if v2p_key else 'Disabled'}\n"
-        f"  Claude Code:    {'Integrated' if claude_integrated else 'Not integrated'}\n"
+        f"  Data Sharing:   {'Enabled' if share else 'Disabled'}\n"
+        f"  Claude Code:    {'Integrated (' + scope + ' scope)' if claude_integrated else 'Not integrated'}\n"
         f"  Config:         {_config_path()}\n"
         f"\n  [bold green]Setup complete![/bold green] Next: vibe2prod scan ./your-project",
         title="Configuration",
