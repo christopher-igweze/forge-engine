@@ -245,9 +245,9 @@
 # so unknown keys crash validation. The TLS bypass log is a defensive security
 # measure, not debug mode being "left enabled."
 # Added: 2026-03-25
-- pattern: "Debug mode left enabled|debug mode.*configuration"
+- pattern: "Debug mode left enabled|debug mode.*configuration|Sensitive data.*logged.*LLM|Sensitive data logged in LLM"
   type: "false_positive"
-  reason: "False positive: ForgeConfig uses extra='forbid' — unknown keys (including debug) crash validation. TLS bypass logging is a defensive security measure, not debug mode."
+  reason: "False positive: ForgeConfig uses extra='forbid' — unknown keys (including debug) crash validation. TLS bypass logging is defensive. Sending code to LLM is FORGE's core function."
 
 # F-d2f6ffaa: _safe_import() in dimensions.py is only ever called with
 # hardcoded string literals (lines 217-223). No user input flows into
@@ -257,3 +257,56 @@
   path: "forge/evaluation/dimensions.py"
   type: "false_positive"
   reason: "False positive: _safe_import() only called with hardcoded string literals (lines 217-223). No user input reaches module_path."
+
+# Debug mode via env var — FORGE is a CLI tool. --verbose is standard CLI
+# behavior, not a production deployment risk. No NODE_ENV/DEPLOYMENT_STAGE exists.
+# Added: 2026-03-26
+- pattern: "Debug mode.*environment variable|debug mode.*production safeguard"
+  type: "false_positive"
+  reason: "False positive: FORGE is a CLI tool, not a deployed service. --verbose is standard CLI flag behavior. No production deployment context exists."
+
+# MCP server returns structured JSON to IDE clients via stdio, not browser HTML.
+# No XSS vector exists — there is no HTML rendering surface.
+# Added: 2026-03-26
+- pattern: "Missing output encoding.*MCP|output encoding.*CLI responses"
+  type: "false_positive"
+  reason: "False positive: MCP returns structured JSON over stdio to IDE clients. CLI writes to stderr/stdout. No HTML rendering surface — no XSS vector."
+
+# repo_url / repo_path is a local filesystem path from CLI args, validated by
+# Path.resolve() + allowed-directory checks in _resolve_path(). Not a remote URL.
+# Added: 2026-03-26
+- pattern: "input validation.*repo_url|Server-side.*validation.*repo_url"
+  type: "false_positive"
+  reason: "False positive: repo_url is a local filesystem path, not a remote URL. Already validated by Path.resolve() and allowed-directory checks in _resolve_path()."
+
+# FORGE is a Python CLI tool. No JavaScript build, no source maps, no browser output.
+# Added: 2026-03-26
+- pattern: "Source maps.*production|source maps.*excluded"
+  type: "false_positive"
+  reason: "False positive: FORGE is a Python CLI tool. No JavaScript build system, no source maps exist."
+
+# CORS rule definitions in forge/rules/ are detection patterns for scanning user
+# codebases, not actual CORS configuration in FORGE itself.
+# Added: 2026-03-26
+- pattern: "CORS wildcard.*security rules|CORS.*permitted.*rules"
+  type: "false_positive"
+  reason: "False positive: CORS YAML rules in forge/rules/ are detection patterns for user codebases, not actual CORS configuration in FORGE."
+
+# API key resolution cascade (flag > env > config) and webhook token in config
+# are accepted risks — config file has 0o600 perms, env var is preferred path.
+# These patterns catch the varying LLM-generated titles for the same underlying issue.
+# Added: 2026-03-26
+- pattern: "API key resolution cascade|reading from config file wit"
+  type: "accepted_risk"
+  reason: "Accepted risk: key resolution cascade is intentional. Config file protected by 0o600. Env var is the recommended path."
+
+- pattern: "Webhook token stored in config|webhook.*insufficient encryption"
+  type: "accepted_risk"
+  reason: "Accepted risk: webhook_token in ForgeConfig has empty default. standalone.py loads from FORGE_WEBHOOK_TOKEN env var. Config file has 0o600 perms."
+
+# Error stack traces go to stderr/logs, not to external callers.
+# MCP returns structured error dicts. CLI wraps in typer.Exit.
+# Added: 2026-03-26
+- pattern: "Error responses expose.*stack traces|stack traces.*exception"
+  type: "accepted_risk"
+  reason: "Accepted risk: tracebacks go to stderr/debug logs, not external callers. MCP returns structured JSON errors. CLI wraps in ForgeResult."
