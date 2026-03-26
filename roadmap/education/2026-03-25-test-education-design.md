@@ -91,18 +91,25 @@ Added to `forge/evaluation/checks/test_quality.py` alongside existing TST-001 th
 | Check ID | Name | Severity | Deduction | What It Catches |
 |----------|------|----------|-----------|----------------|
 | **TST-008** | Weak assertions | medium | -5 to -15 | `assert True`, `assert x is not None`, assertions that don't verify actual values. Detected by matching assertion nodes in the AST against a list of known-weak patterns. |
-| **TST-009** | Mock overload | medium | -5 to -10 | More `@patch`/`mock` decorators than assertion statements in a test function. Indicates the test is testing mocks, not real code. Detected by counting mock decorators vs assertion nodes. |
-| **TST-010** | Duplicate test bodies | low | -3 to -8 | Multiple test functions with identical or near-identical AST structure (>90% node similarity). Inflates test count without adding real coverage. Detected by AST hashing and comparison. |
+| **TST-009** | Mock overload | medium | -5 to -10 | 3+ `@patch`/`mock` decorators with 0-1 assertion statements in a test function. Indicates the test is testing mocks, not real code. Minimum threshold avoids flagging legitimate integration tests that mock external services with a single complex assertion. |
+| **TST-010** | Duplicate test bodies | low | -3 to -8 | Multiple test functions with structurally identical AST after normalization. Inflates test count without adding real coverage. |
 
 ### Detection Method
 
-- Tree-sitter AST parsing (reuses `forge/graph/builder.py` infrastructure)
+- Uses Python's `ast` module (consistent with existing TST-001 through TST-007 which use `parse_ast_safe()` / `ast.parse()`). This means Layer 1 checks are **Python-only**. JS/TS test file analysis is deferred to Layer 2 (LLM-powered).
 - Pattern matching on assertion nodes, mock/patch decorators, function bodies
-- AST hashing for duplicate detection (normalize variable names, compare structure)
+- TST-010 duplicate detection algorithm:
+  1. Parse each test function's AST
+  2. Normalize: replace all `Name`/identifier nodes with a placeholder, strip string literal values
+  3. Hash the normalized AST structure (SHA-256 of `ast.dump()`)
+  4. Exact hash matches = duplicates. No fuzzy threshold — only structural identity after normalization.
+  5. Comparison scope: per-file (not cross-file). Cross-file duplicates are a future enhancement.
 
 ### Scoring
 
-Each failed check applies a deduction to the `test_quality` dimension score (same mechanism as TST-001 through TST-007). Deduction scales with the number of violations found.
+Each failed check applies a deduction to the `test_quality` dimension score (same mechanism as TST-001 through TST-007). Deduction scales with the number of violations found. TST-008 to TST-010 follow the same function signature (`_check_tstXXX(repo_path: str) -> CheckResult`) and are added to `run_test_quality_checks()` (updating it from 7 to 10 checks).
+
+TST-008 to TST-010 have **no per-check configuration** — they are always-on during FORGE scans, consistent with existing checks. The `.forge/config.yml` settings (below) only govern the `/test-audit` skill (Layer 2), not the deterministic checks.
 
 ### Limitations
 
@@ -209,7 +216,9 @@ Claude Code hook — `PostToolUse` on `Bash`, filtering for `git commit` command
 
 **Scope:** Only analyzes changed test files per commit, not the full codebase. Full analysis requires `/test-audit refresh`.
 
-**Installation:** Skill automatically adds the hook to `.claude/settings.json` when first run.
+**Installation:** On first run, the skill prompts: "Enable real-time test feedback on commits? This adds a hook to `.claude/settings.json` (project-level, not global)." If accepted, it writes a `PostToolUse` hook entry. The hook can be disabled by setting `test_audit.realtime_feedback: false` in `.forge/config.yml` or by removing the hook entry from `.claude/settings.json`.
+
+**Retention:** The "Recent Analysis" section retains the last 20 entries. Older entries are removed on each append to prevent unbounded growth.
 
 #### Refresh
 
@@ -283,6 +292,7 @@ Layer 1 results feed into Layer 2: when FORGE scan data exists at `{target_repo}
 | No test files found | Guide shows "No tests detected" with a starter checklist of what to test first based on detected features |
 | No features detected | Falls back to listing test files with explanations, without feature grouping |
 | No codebase guide | Feature detection uses routes/services/models directly (less context, still works) |
+| Malformed codebase guide | Falls back to routes/services/models detection, logs a warning that the codebase guide could not be parsed |
 | No FORGE scan data | Layer 1 results omitted, Layer 2 semantic analysis still runs |
 | LLM analysis fails | Guide shows test-to-feature mapping with structural info only, notes that semantic analysis is unavailable |
 | Very large test suite (500+ test files) | Prioritizes critical features first (auth, payments, data handling), notes remaining features as "not yet analyzed" |
