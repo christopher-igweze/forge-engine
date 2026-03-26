@@ -175,6 +175,62 @@ class CodebaseMap(BaseModel):
     key_patterns: list[str] = Field(default_factory=list)
 
 
+# ── Stable Rule Family Taxonomy ────────────────────────────────────────
+
+# Stable rule family taxonomy for suppression matching.
+# LLM auditor outputs one of these; title becomes display-only.
+RULE_FAMILIES: dict[str, str] = {
+    # Security
+    "hardcoded-secret": "Hardcoded credentials, API keys, tokens in source code",
+    "sql-injection": "SQL injection via string concatenation or unsafe input",
+    "xss": "Cross-site scripting — unescaped user input in HTML/JS output",
+    "path-traversal": "Directory traversal via unsanitized file path input",
+    "command-injection": "OS command injection via unsanitized input",
+    "ssrf": "Server-side request forgery — user-controlled URLs in server requests",
+    "idor": "Insecure direct object reference — missing ownership checks",
+    "missing-auth-check": "Endpoint or function lacks authentication verification",
+    "missing-rate-limit": "Endpoint lacks rate limiting or throttling",
+    "insecure-deserialization": "Unsafe deserialization of untrusted data",
+    "weak-crypto": "Use of weak or deprecated cryptographic algorithms",
+    "sensitive-data-exposure": "Sensitive data in logs, errors, responses, or storage",
+    "missing-input-validation": "User input not validated before processing",
+    "insecure-tls": "Missing or misconfigured TLS/SSL settings",
+    "open-redirect": "User-controlled redirect URL without validation",
+    "csrf": "Missing CSRF token or protection on state-changing endpoints",
+    "session-fixation": "Session token not rotated after authentication",
+    "error-info-leak": "Stack traces, debug info, or internal details in error responses",
+    "missing-security-headers": "Missing security headers (CSP, HSTS, X-Frame-Options, etc.)",
+    "cors-misconfiguration": "Overly permissive CORS policy",
+    # Quality
+    "missing-error-handling": "Missing try/catch or error handling for failure-prone operations",
+    "missing-type-hints": "Functions or variables lack type annotations",
+    "dead-code": "Unreachable or unused code",
+    "code-duplication": "Duplicated logic that should be extracted",
+    "complex-function": "Function exceeds complexity thresholds",
+    "missing-logging": "Operations lack logging for observability",
+    # Architecture
+    "circular-dependency": "Circular import or dependency between modules",
+    "god-class": "Class with too many responsibilities",
+    "tight-coupling": "Components directly depend on implementation details",
+    "missing-abstraction": "Direct usage where an interface/abstraction is warranted",
+    "config-in-code": "Configuration values hardcoded instead of externalized",
+    # Reliability
+    "unhandled-exception": "Exception type not caught or handled",
+    "resource-leak": "File handle, connection, or resource not properly closed",
+    "race-condition": "Concurrent access without synchronization",
+    "missing-timeout": "Network call or operation without timeout",
+    "missing-retry": "Transient failure without retry logic",
+    # Performance
+    "n-plus-one": "N+1 query pattern in database access",
+    "missing-pagination": "Unbounded query results without pagination",
+    "blocking-io": "Blocking I/O in async context",
+    "missing-cache": "Repeated expensive computation without caching",
+    "missing-index": "Database query on unindexed column",
+    # Catch-all
+    "other": "Finding that doesn't fit a specific rule family",
+}
+
+
 # ── Agent 2-4: Audit Findings ─────────────────────────────────────────
 
 
@@ -212,6 +268,13 @@ class AuditFinding(BaseModel):
     data_flow: str = ""  # source -> transformation -> sink trace
     actionability: str = ""  # must_fix | should_fix | consider | informational
     intent_signal: str = ""  # intentional | ambiguous | unintentional (set by Intent Analyzer)
+
+    # Phase 2: Structured identity (title becomes display-only)
+    rule_family: str = ""  # stable category: hardcoded-secret, sql-injection, missing-auth-check, etc.
+
+    # Phase 3: Resilient anchors
+    evidence_hash: str = ""  # SHA-256 of normalized code snippet from primary location
+    enclosing_symbol: str = ""  # nearest function/class/method name containing the finding
 
 
 # ── Agent 2: Security Auditor ─────────────────────────────────────────

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from pathlib import Path
 
 
 def find_match(
@@ -82,12 +83,16 @@ def fingerprint(finding: dict) -> str:
     Hash components:
     - category (security, quality, architecture, performance)
     - audit_pass (auth_flow, data_handling, etc.)
-    - primary file path (relative to repo root)
+    - primary file path
     - line range bucket (floor to nearest 10 lines)
-    - normalized title (lowercase, strip file paths/line numbers/LOC counts)
+    - rule_family if available, else normalized title (fallback)
     - CWE ID if present
     """
-    norm_title = _normalize_title(finding.get("title", ""))
+    # Prefer rule_family over title for stability
+    identity = finding.get("rule_family") or ""
+    if not identity:
+        identity = _normalize_title(finding.get("title", ""))
+
     loc = (finding.get("locations") or [{}])[0]
     file_path = loc.get("file_path", "")
     line_bucket = (loc.get("line_start", 0) // 10) * 10
@@ -97,7 +102,7 @@ def fingerprint(finding: dict) -> str:
         finding.get("audit_pass") or "",
         file_path or "",
         str(line_bucket),
-        norm_title,
+        identity,
         finding.get("cwe_id") or "",
     ]
     raw = "|".join(components)
@@ -116,3 +121,58 @@ def _normalize_title(title: str) -> str:
     # Collapse whitespace
     result = re.sub(r"\s+", " ", result).lower().strip()
     return result
+
+
+def compute_evidence_hash(snippet: str) -> str:
+    """Compute a stable hash of a code snippet for suppression matching.
+
+    Normalizes whitespace and removes comments before hashing
+    so minor formatting changes don't break the match.
+    """
+    if not snippet:
+        return ""
+    # Normalize: strip, collapse whitespace, remove single-line comments
+    normalized = re.sub(r"#.*$", "", snippet, flags=re.MULTILINE)  # Python comments
+    normalized = re.sub(r"//.*$", "", normalized, flags=re.MULTILINE)  # JS/C comments
+    normalized = re.sub(r"\s+", " ", normalized).strip().lower()
+    if not normalized:
+        return ""
+    return hashlib.sha256(normalized.encode()).hexdigest()[:12]
+
+
+def detect_enclosing_symbol(file_path: str, line_number: int) -> str:
+    """Detect the nearest enclosing function/class/method name for a line.
+
+    Uses simple regex-based detection (not full AST) for broad language support.
+    Returns empty string if no enclosing symbol found.
+    """
+    if not file_path or not line_number or not Path(file_path).exists():
+        return ""
+
+    try:
+        lines = Path(file_path).read_text().splitlines()
+    except Exception:
+        return ""
+
+    if line_number > len(lines):
+        return ""
+
+    # Walk backwards from the finding line to find the nearest def/class/function
+    patterns = [
+        re.compile(r"^\s*(?:async\s+)?def\s+(\w+)"),  # Python function
+        re.compile(r"^\s*class\s+(\w+)"),  # Python class
+        re.compile(r"^\s*(?:export\s+)?(?:async\s+)?function\s+(\w+)"),  # JS function
+        re.compile(r"^\s*(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?\("),  # JS arrow fn
+        re.compile(r"^\s*(?:public|private|protected)\s+(?:static\s+)?(?:async\s+)?\w+\s+(\w+)\s*\("),  # Java/C# method
+        re.compile(r"^\s*func\s+(\w+)"),  # Go function
+        re.compile(r"^\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)"),  # Rust function
+    ]
+
+    for i in range(min(line_number - 1, len(lines) - 1), -1, -1):
+        line = lines[i]
+        for pattern in patterns:
+            match = pattern.match(line)
+            if match:
+                return match.group(1)
+
+    return ""
