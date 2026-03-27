@@ -416,13 +416,18 @@ async def sync_forgeignore_training(
 
     entries = []
     for rule in fi.rules:
+        # Use rule_family as the primary identity, fall back to pattern/check_id
+        pattern_value = rule.rule_family or rule.pattern or rule.check_id or ""
+        # Category from rule or infer from rule_family
+        category_value = rule.category or rule.kind or ""
         entries.append({
-            "pattern": rule.pattern or rule.check_id or "",
-            "category": rule.category or "",
+            "pattern": pattern_value,
+            "category": category_value,
             "reason": rule.reason,
-            "type": rule.kind or rule.type or "false_positive",
+            "type": rule.kind or "false_positive",
+            "rule_family": rule.rule_family or "",
             "check_id": rule.check_id,
-            "path": rule.path,
+            "path": rule.file or rule.path,
             "max_severity": getattr(rule, "max_severity", None),
         })
 
