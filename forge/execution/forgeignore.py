@@ -109,7 +109,13 @@ class SuppressionRule:
 
         # Strategy 1: Exact ID match
         if self.check_id:
-            finding_check_id = finding.get("check_id") or finding.get("id") or ""
+            finding_check_id = finding.get("check_id") or finding.get("pattern_id") or ""
+            # Opengrep embeds rule ID in data_flow as "file:line [rule.id]"
+            if not finding_check_id:
+                data_flow = finding.get("data_flow", "")
+                m = re.search(r"\[([^\]]+)\]", data_flow)
+                if m:
+                    finding_check_id = m.group(1)
             if self.check_id == finding_check_id:
                 return self._file_matches(finding)  # scope to file if specified
             return False
