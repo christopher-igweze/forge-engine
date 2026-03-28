@@ -128,3 +128,13 @@ The hook calls this function and formats the output.
 **In scope:** Post-commit audit hook, 4 checks (expired, orphaned, missing reason, stale risk), configurable interval and stale threshold, summary output, `added` field promotion in v2 schema.
 
 **Out of scope:** Auto-removing entries (just flags them), integration with `/forgeignore` skill (existing skill handles cleanup), v1 format migration prompts.
+
+## Implementation Notes
+
+**1. BaselineEntry needs enrichment for orphan detection.** Current `BaselineEntry` lacks `check_id` and `rule_family` fields. Without these, orphan detection only works for title-regex and path-glob rules. Fix: extend `BaselineEntry` with `check_id` and `rule_family` fields — capture them at `update_from_scan()` time in `baseline.py`. Small, backward-compatible schema change.
+
+**2. Finding dict reconstruction from BaselineEntry.** `SuppressionRule.matches()` expects `finding["locations"]` as a list of dicts with `file_path` keys. Reconstruct as: `{"locations": [{"file_path": entry.file_path}], "title": entry.title, "category": entry.category, "cwe": entry.cwe_id, "check_id": entry.check_id, "rule_family": entry.rule_family}`.
+
+**3. Gitignore for state file.** Add `.forge/review_state.json` to `.forge/.gitignore` (create if needed).
+
+**4. Entry count semantics.** Count is `len(data["suppressions"])` from raw YAML parsing for v2, or `len(data)` for v1 lists. Use raw YAML, not `ForgeIgnore.load()` (which drops invalid entries).
