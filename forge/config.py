@@ -69,6 +69,7 @@ class ForgeConfig(BaseModel):
 
     # ── Project Context ───────────────────────────────────────────
     project_context: dict = {}  # User-provided project context for scan personalization
+    user_preferences: dict = {}  # Onboarding prefs: technical_level, explanation_style, shipping_posture, coding_tool
 
     # ── Webhook Event Emission ────────────────────────────────────
     webhook_url: str = ""       # POST endpoint for scan progress events

@@ -331,6 +331,38 @@ async def _run_discovery(
         except Exception as e:
             logger.warning("Convention extraction failed (non-fatal): %s", e)
 
+        # Append user preferences to context (zero LLM cost, just prompt text)
+        if cfg.user_preferences:
+            prefs = cfg.user_preferences
+            pref_lines = ["\n## User Preferences"]
+            if prefs.get("technical_level"):
+                pref_lines.append(f"- Technical level: {prefs['technical_level']}")
+            if prefs.get("explanation_style"):
+                pref_lines.append(f"- Explanation style: {prefs['explanation_style']}")
+            if prefs.get("shipping_posture"):
+                pref_lines.append(f"- Shipping posture: {prefs['shipping_posture']}")
+            if prefs.get("coding_tool"):
+                tool = prefs["coding_tool"]
+                if prefs.get("coding_tool_other"):
+                    tool = prefs["coding_tool_other"]
+                pref_lines.append(f"- Coding tool: {tool}")
+            if len(pref_lines) > 1:
+                pref_instructions = (
+                    "\n\nAdapt your findings based on the user's preferences above:\n"
+                    "- For technical_level 'vibe_coder': use plain language, avoid jargon, give step-by-step fix instructions.\n"
+                    "- For technical_level 'engineer': be concise, reference CWE IDs, show code diffs.\n"
+                    "- For technical_level 'founder': focus on business risk and impact, skip implementation details.\n"
+                    "- For shipping_posture 'move_fast': only flag critical and high severity findings.\n"
+                    "- For shipping_posture 'careful': flag everything including informational observations.\n"
+                    "- For explanation_style 'just_steps': bullet-point fixes only, no reasoning.\n"
+                    "- For explanation_style 'explain_why': include reasoning behind each finding.\n"
+                    "- For explanation_style 'deep_dive': full technical context and references."
+                )
+                pref_block = "\n".join(pref_lines) + pref_instructions
+                project_context_str = (
+                    f"{project_context_str}\n{pref_block}" if project_context_str else pref_block
+                )
+
         # Load .forgeignore for prompt injection (prevents re-flagging suppressed patterns)
         forgeignore_context = None
         if getattr(cfg, "share_forgeignore", True):

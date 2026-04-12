@@ -273,6 +273,7 @@ def scan(
     max_time: float = typer.Option(0.0, "--max-time", help="Max duration in seconds before aborting (0 = no limit)"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging"),
     aivss: bool = typer.Option(False, "--aivss", help="Include OWASP AIVSS scoring in report"),
+    context: str | None = typer.Option(None, "--context", "-c", help="Path to JSON file with user preferences + project context"),
     json_output: bool = typer.Option(False, "--json", "-j", help="Output result as JSON"),
 ) -> None:
     """Scan a repository and produce findings + remediation plan.
@@ -314,6 +315,23 @@ def scan(
         config["max_duration_seconds"] = max_time
     if aivss:
         config["aivss_enabled"] = True
+
+    if context:
+        context_path = Path(context)
+        if not context_path.exists():
+            typer.echo(f"Error: context file not found: {context}", err=True)
+            raise typer.Exit(1)
+        try:
+            context_data = json.loads(context_path.read_text())
+        except json.JSONDecodeError as e:
+            typer.echo(f"Error: invalid JSON in context file: {e}", err=True)
+            raise typer.Exit(1)
+        # Inject project context for FORGE agents (Security Auditor, Codebase Analyst)
+        if "project" in context_data:
+            config["project_context"] = context_data["project"]
+        # Inject user preferences for output personalization
+        if "user" in context_data:
+            config["user_preferences"] = context_data["user"]
 
     from forge.standalone import run_standalone
 
