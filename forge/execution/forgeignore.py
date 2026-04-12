@@ -228,9 +228,24 @@ class ForgeIgnore:
 
     @classmethod
     def load(cls, repo_path: str) -> ForgeIgnore:
-        path = Path(repo_path) / FORGEIGNORE_FILENAME
-        if not path.exists():
+        repo = Path(repo_path)
+        forge_dir_path = repo / ".forge" / FORGEIGNORE_FILENAME
+        root_path = repo / FORGEIGNORE_FILENAME
+
+        # Resolution: .forge/.forgeignore preferred, root fallback
+        if forge_dir_path.exists() and root_path.exists():
+            logger.warning(
+                "Found .forgeignore at both .forge/.forgeignore and repo root. "
+                "Using .forge/.forgeignore."
+            )
+            path = forge_dir_path
+        elif forge_dir_path.exists():
+            path = forge_dir_path
+        elif root_path.exists():
+            path = root_path
+        else:
             return cls()
+
         try:
             data = yaml.safe_load(path.read_text())
         except Exception:

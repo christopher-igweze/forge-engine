@@ -193,6 +193,57 @@ def _score_color(score: float | int, high: int = 80, mid: int = 60):
     return typer.colors.YELLOW if score >= mid else typer.colors.RED
 
 
+FORGE_CONTEXT_TEMPLATE = {
+    "_comment": "FORGE project context. Edit these fields to improve scan accuracy. See https://docs.vibe2prod.net/context",
+    "product_summary": "",
+    "target_users": "",
+    "sensitive_data": [],
+    "critical_flows": [],
+    "deployment_target": "",
+    "scale_expectation": "",
+    "vibe_prompt": "",
+}
+
+
+def _ensure_forge_folder(repo_path: str) -> None:
+    """Create .forge/context.json with a template if it doesn't exist yet."""
+    forge_dir = Path(repo_path) / ".forge"
+    context_file = forge_dir / "context.json"
+    if context_file.exists():
+        return
+    forge_dir.mkdir(exist_ok=True)
+    context_file.write_text(json.dumps(FORGE_CONTEXT_TEMPLATE, indent=2) + "\n")
+    typer.echo("Created .forge/context.json \u2014 edit it to improve scan accuracy.")
+
+
+def _is_template_context(data: dict) -> bool:
+    """Return True if the context data is empty / still the template."""
+    for key, value in data.items():
+        if key.startswith("_"):
+            continue
+        if isinstance(value, str) and value:
+            return False
+        if isinstance(value, list) and value:
+            return False
+    return True
+
+
+def _inject_forge_context(repo_path: str, config: dict) -> None:
+    """Read .forge/context.json and inject into config['project_context'] if non-empty."""
+    context_file = Path(repo_path) / ".forge" / "context.json"
+    if not context_file.exists():
+        return
+    try:
+        data = json.loads(context_file.read_text())
+    except (json.JSONDecodeError, OSError):
+        return
+    if not isinstance(data, dict) or _is_template_context(data):
+        return
+    # Strip the _comment field before injecting
+    project_context = {k: v for k, v in data.items() if not k.startswith("_")}
+    config["project_context"] = project_context
+
+
 def _print_evaluation(eval_data: dict) -> None:
     """Print v3 evaluation section."""
     scores = eval_data.get("scores", {})
@@ -298,6 +349,9 @@ def scan(
     _setup_logging(verbose)
     repo_path = _resolve_path(path)
 
+    # ── Auto-create .forge/ folder on first scan ────────────────────
+    _ensure_forge_folder(repo_path)
+
     config: dict = {
         "mode": "full",
         "repo_path": repo_path,
@@ -332,6 +386,9 @@ def scan(
         # Inject user preferences for output personalization
         if "user" in context_data:
             config["user_preferences"] = context_data["user"]
+    else:
+        # ── Auto-read .forge/context.json if --context not passed ───
+        _inject_forge_context(repo_path, config)
 
     from forge.standalone import run_standalone
 
