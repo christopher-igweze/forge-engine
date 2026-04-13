@@ -2,7 +2,7 @@
 
 **Framework for Orchestrated Remediation & Governance Engine**
 
-A 12-agent AI system that scans codebases for security, quality, and architecture issues — then fixes them.
+AI-powered codebase audit engine. 3 LLM agents + Opengrep SAST + 47 deterministic checks. ~$0.21 per scan.
 
 ## Quick Start
 
@@ -10,14 +10,14 @@ A 12-agent AI system that scans codebases for security, quality, and architectur
 # Install
 pip install vibe2prod
 
+# Scan a repo (code stays local — only LLM API calls leave your machine)
+vibe2prod scan ./my-app
+
 # Register as MCP server in Claude Code
 claude mcp add forge -e OPENROUTER_API_KEY=your-key -- python -m forge.mcp_server
-
-# Scan a repo
-# (use the forge_scan tool in Claude Code)
 ```
 
-Get an OpenRouter API key at [openrouter.ai](https://openrouter.ai) (free signup).
+Get an OpenRouter API key at [openrouter.ai](https://openrouter.ai) (free signup). Scans also work without a key (Opengrep-only mode, no LLM agents).
 
 ### The /forge Skill
 
@@ -25,112 +25,145 @@ After scanning, use the `/forge` skill in Claude Code to autonomously fix findin
 
 Full CLI documentation: [vibe2prod.net/cli](https://vibe2prod.net/cli)
 
-## Architecture
+## Architecture (v3)
 
 ```
-Discovery (Agents 1-4)     Scan codebase, identify issues
-    |
-Triage (Agents 5-6)        Classify by complexity tier (0-3), plan fixes
-    |
-Remediation (Agents 7-10)  Apply fixes via three control loops
-    |
-Validation (Agents 11-12)  Verify fixes, generate readiness report
+Step 1: Codebase Analyst (LLM)     Map architecture, entry points, auth flows, data structures
+   |
+Step 2: Opengrep SAST              49 custom rules + community rules (deterministic)
+   |
+Step 3: Security Auditor (LLM)     3 parallel passes against OWASP ASVS rubric
+   |
+Step 4: Fix Strategist (LLM)       Prioritized remediation plan with dependencies
+   |
+Step 5: Evaluation (deterministic)  47 checks across 7 dimensions → composite score + quality gate
+   |
+Post:   Fingerprint → Calibrate → Suppress → Baseline → Report
 ```
 
 ### Agents
 
-| # | Agent | Role |
-|---|-------|------|
-| 1 | Codebase Analyst | Map architecture, files, dependencies |
-| 2 | Security Auditor | 3-pass parallel security scan |
-| 3 | Quality Auditor | 3-pass parallel quality scan |
-| 4 | Architecture Reviewer | Structural coherence evaluation |
-| 5 | Fix Strategist | Prioritize and order fixes |
-| 6 | Triage Classifier | Assign complexity tiers (0-3) |
-| 7 | Coder Tier 2 | Scoped fixes (1-3 files) |
-| 8 | Coder Tier 3 | Architectural fixes (5-15 files) |
-| 9 | Test Generator | Write tests for fixes |
-| 10 | Code Reviewer | Review fix quality |
-| 11 | Integration Validator | Verify merged codebase |
-| 12 | Debt Tracker | Generate readiness report |
+| # | Agent | Model | LLM Calls | Role |
+|---|-------|-------|-----------|------|
+| 1 | Codebase Analyst | MiniMax M2.5 | 1 | Map architecture, files, dependencies |
+| 2 | Security Auditor | Haiku 4.5 | 3 (parallel) | OWASP ASVS security scan (auth, data, infra) |
+| 3 | Fix Strategist | Haiku 4.5 | 1 | Prioritize findings, create execution plan |
 
-### Control Loops
+Total: 5 LLM calls per scan.
 
-- **Inner Loop**: Coder -> Review -> Retry (max 3 iterations)
-- **Middle Loop**: Escalation when inner loop exhausted (RECLASSIFY / DEFER)
-- **Outer Loop**: Re-plan with Fix Strategist (max 1 replan)
+### Evaluation (Zero LLM Cost)
 
-### Tier Routing
+47 deterministic checks across 7 dimensions:
 
-- **Tier 0**: Auto-skip (invalid / false-positive)
-- **Tier 1**: Deterministic fix (no LLM needed)
-- **Tier 2**: Scoped AI fix (1-3 files, Sonnet 4.6)
-- **Tier 3**: Architectural AI fix (5-15 files, Sonnet 4.6)
+| Dimension | Weight | Checks |
+|-----------|--------|--------|
+| Security | 30% | 12 (OWASP Top 10, injection, secrets, etc.) |
+| Reliability | 20% | 7 |
+| Maintainability | 15% | 5 |
+| Test Quality | 15% | 7 |
+| Performance | 10% | 5 |
+| Documentation | 5% | 6 |
+| Operations | 5% | 5 |
 
-## Requirements
+Produces a composite score with band ratings: **A** (80+), **B** (60-79), **C** (40-59), **D** (20-39), **F** (0-19). Same code always produces the same score.
 
-- Python 3.12+
-- OpenRouter API key (for LLM providers)
-- [AgentField](https://github.com/anomalyco/agentfield) control plane (optional — only needed for platform mode)
+## CLI
 
-## Usage
+```bash
+vibe2prod scan ./repo              # Full pipeline
+vibe2prod report ./repo            # View last report
+vibe2prod status ./repo            # Real-time progress
+vibe2prod config set/get           # Configuration
+vibe2prod setup                    # Interactive setup + Claude Code MCP registration
+vibe2prod update                   # Self-update + skill/hook sync
+```
 
-### Standalone Mode
-
-Run FORGE locally without an AgentField server:
+## SDK
 
 ```python
 from forge.standalone import run_standalone
 
-result = await run_standalone(repo_path="./my-app", config={"mode": "discovery"})
+result = await run_standalone(
+    repo_path="./my-app",
+    config={"mode": "full", "quality_gate_profile": "forge-way"}
+)
+print(result.total_findings, result.evaluation["scores"]["composite"])
 ```
 
-### AgentField Mode
+## Key Features
 
-```bash
-# Start as AgentField node
-python -m forge
+**Finding Management**
+- Content-based fingerprinting (SHA-256) for stable finding identity across scans
+- Cross-scan baseline tracking with delta reports (new/recurring/fixed/regressed)
+- `.forgeignore` suppression system (YAML v2 schema) with pattern matching, expiry dates, and audit trail
+- Severity calibration: OWASP boost, architecture cap, confidence weighting
 
-# Or via entry point
-forge-engine
-```
+**Quality Gates**
+- Configurable profiles: `forge-way` (default), `strict`, `startup`
+- Pass/fail against thresholds (critical/high/medium counts)
+- AIVSS scoring for agentic AI risk assessment (OWASP AIVSS v0.5)
+- OWASP ASVS level mapping, STRIDE threat coverage, NIST SSDF compliance
 
-FORGE registers as an AgentField node (`forge-engine`) and exposes three reasoners:
-
-- `remediate` — Full pipeline: scan -> triage -> fix -> validate
-- `discover` — Scan-only mode (Agents 1-6, no fixes)
-- `scan` — Alias for discover (free tier)
-
-### Hive Discovery (Swarm Mode)
-
-An alternative discovery architecture using a three-layer swarm approach:
-
-```python
-config = {"discovery_mode": "swarm"}  # default: "classic"
-```
-
-See `doc/hive-discovery-spec.md` for the full design.
+**Reporting**
+- HTML, JSON, and text report formats
+- Real-time status tracking (`live_status.json`)
+- Cost and time budgeting with circuit breakers
+- Webhook event emission for CI/CD integration
 
 ## Configuration
 
-Model routing is configurable per-agent via the `models` dict:
-
 ```python
 config = {
+    "mode": "full",                    # full | discovery
     "models": {
         "default": "anthropic/claude-haiku-4.5",
-        "coder_tier2": "anthropic/claude-sonnet-4.6",
-        "coder_tier3": "anthropic/claude-sonnet-4.6",
-    }
+        "analyst": "minimax/minimax-m2.5",
+    },
+    "quality_gate_profile": "forge-way",  # forge-way | strict | startup
+    "enable_parallel_audit": True,
+    "opengrep_enabled": True,
+    "max_cost_usd": 0.50,             # Cost budget (0 = no limit)
+    "max_duration_seconds": 600,       # Time budget (0 = no limit)
 }
 ```
 
-Resolution: `defaults` < `models.default` < `models.<role>`
+Model resolution: built-in defaults → `models.default` → `models.<role>`
 
-## Resilience
+## Requirements
 
-FORGE normalizes LLM outputs before validation to handle model inconsistencies:
+- Python 3.10+
+- OpenRouter API key (optional — Opengrep-only mode works without one)
 
-- **Category aliases**: LLM-returned categories are mapped to canonical categories (`quality`, `reliability`, `security`) via `_CATEGORY_ALIASES`
-- **Priority floor**: Priorities < 1 are clamped to 1 before validation
-- **Dependency coercion**: `depends_on_finding_id` returned as a list is coerced to a string
+## Project Structure
+
+```
+forge/
+├── cli.py                    # Typer CLI: scan, report, status, config, setup
+├── standalone.py             # run_standalone() — primary SDK entry point
+├── phases.py                 # Pipeline orchestration
+├── mcp_server.py             # MCP server (forge_scan, forge_status tools)
+├── config.py                 # ForgeConfig + model routing
+├── schemas.py                # Pydantic models: Finding, ForgeResult, etc.
+├── reasoners/
+│   └── discovery.py          # Codebase Analyst + Security Auditor
+├── prompts/                  # Agent prompt templates (OWASP ASVS rubric)
+├── execution/
+│   ├── opengrep_runner.py    # Opengrep SAST integration
+│   ├── fingerprint.py        # SHA-256 content-based finding IDs
+│   ├── baseline.py           # Cross-scan delta comparison
+│   ├── forgeignore.py        # .forgeignore parser + suppression matching
+│   ├── severity.py           # Severity calibration
+│   ├── quality_gate.py       # Pass/fail gate
+│   └── report_rendering.py   # HTML/JSON report generation
+├── evaluation/
+│   ├── dimensions.py         # 7-dimension scoring + weights
+│   ├── checks/               # 47 deterministic checks
+│   ├── compliance.py         # OWASP ASVS/STRIDE/NIST mapping
+│   └── aivss.py              # OWASP AIVSS scoring
+├── rules/                    # 49 custom Opengrep YAML rules
+└── graph/                    # Tree-sitter AST analysis
+```
+
+## Part of Vibe2Prod
+
+FORGE is the audit engine behind [vibe2prod.net](https://vibe2prod.net). The web platform adds a dashboard, GitHub integration, team management, and wallet-based billing on top of this engine. Source: [`christopher-igweze/vibe2prod`](https://github.com/christopher-igweze/vibe2prod).
