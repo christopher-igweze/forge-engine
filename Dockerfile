@@ -41,6 +41,12 @@ RUN mkdir -p /workspaces && chown appuser:appuser /workspaces
 
 USER appuser
 
-# Default: run as CLI tool (override with docker run args)
-ENTRYPOINT ["vibe2prod"]
-CMD ["scan", "--help"]
+# Default: run the MCP server over SSE on port 8004 so hosted deployments
+# (e.g. Coolify at forge.verstandai.site) expose a working remote MCP
+# endpoint. Local users who install the PyPI package run `forge-mcp` with
+# stdio transport directly — this default only affects container deploys.
+ENV FORGE_MCP_TRANSPORT=sse \
+    FORGE_MCP_HOST=0.0.0.0 \
+    FORGE_MCP_PORT=8004
+EXPOSE 8004
+CMD ["forge-mcp"]

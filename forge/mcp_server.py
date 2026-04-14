@@ -304,8 +304,19 @@ def forge_health() -> dict:
 
 
 def main() -> None:
-    """Entry point for the FORGE MCP server."""
-    mcp.run()
+    """Entry point for the FORGE MCP server.
+
+    Transport is chosen via the FORGE_MCP_TRANSPORT env var:
+      - unset or "stdio" (default): local use with Claude Desktop / CLI
+      - "sse": hosted HTTP/SSE server (bound to FORGE_MCP_HOST:FORGE_MCP_PORT)
+    """
+    transport = os.environ.get("FORGE_MCP_TRANSPORT", "stdio").lower()
+    if transport == "sse":
+        mcp.settings.host = os.environ.get("FORGE_MCP_HOST", "0.0.0.0")
+        mcp.settings.port = int(os.environ.get("FORGE_MCP_PORT", "8004"))
+        mcp.run(transport="sse")
+    else:
+        mcp.run()
 
 
 if __name__ == "__main__":
