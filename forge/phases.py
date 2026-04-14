@@ -643,12 +643,33 @@ async def _run_discovery(
                 ) if findings_delta.get("new", 0) > 0 else 0,
             }
 
+        # Filter opengrep findings through .forgeignore BEFORE scoring so
+        # suppressed findings don't inflate dimension deductions.
+        scoring_opengrep = opengrep_findings
+        if opengrep_findings:
+            try:
+                from forge.execution.forgeignore import ForgeIgnore
+                fi = ForgeIgnore.load(state.repo_path)
+                if fi.rules:
+                    kept, _sup = fi.apply(opengrep_findings)
+                    scoring_opengrep = kept
+                    if len(kept) != len(opengrep_findings):
+                        logger.info(
+                            "Filtered %d Opengrep findings via .forgeignore before scoring (%d remaining)",
+                            len(opengrep_findings) - len(kept), len(kept),
+                        )
+            except Exception as _fi_err:
+                logger.warning(
+                    "Could not apply .forgeignore to Opengrep findings (non-fatal): %s",
+                    _fi_err,
+                )
+
         evaluation_result = run_evaluation(
             state.repo_path,
             gate_profile=gate_profile,
             weights=eval_weights,
             baseline_comparison=baseline_comp,
-            opengrep_findings=opengrep_findings if opengrep_findings else None,
+            opengrep_findings=scoring_opengrep if scoring_opengrep else None,
         )
     except Exception as e:
         logger.warning("v3 evaluation failed (non-fatal): %s", e)

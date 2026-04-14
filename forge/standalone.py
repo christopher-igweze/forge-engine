@@ -301,8 +301,17 @@ async def run_standalone(
 
     # Generate discovery report (findings + remediation plan) after telemetry
     # flush so cost_usd is populated.
+    #
+    # We emit the report when there are LLM/Opengrep findings OR when the
+    # deterministic evaluation flagged any failed checks — so deterministic
+    # failures are surfaced even in repos where no LLM findings exist.
     discovery_report_data: dict | None = None
-    if state.all_findings and state.artifacts_dir:
+    _eval_result = getattr(state, "_v3_evaluation", None) or None
+    _has_deterministic_failures = bool(
+        _eval_result
+        and (_eval_result.get("deterministic_checks") or {}).get("failed_checks")
+    )
+    if (state.all_findings or _has_deterministic_failures) and state.artifacts_dir:
         try:
             from forge.execution.report import generate_discovery_report
             _paths, discovery_report_data = generate_discovery_report(
@@ -313,6 +322,7 @@ async def run_standalone(
                 duration_seconds=elapsed,
                 cost_usd=state.estimated_cost_usd,
                 codebase_map=state.codebase_map,
+                evaluation_result=_eval_result,
             )
         except Exception as e:
             logger.warning("Discovery report generation failed: %s", e, exc_info=True)

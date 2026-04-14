@@ -102,15 +102,14 @@ def compute_scores_from_opengrep(
     Returns:
         (DimensionScores, list of CheckResult-compatible objects)
     """
-    from forge.evaluation.checks import CheckResult
+    from forge.evaluation.checks import (
+        CheckResult,
+        SEVERITY_DEDUCTIONS as _STANDARD_DEDUCTIONS,
+    )
 
-    SEVERITY_DEDUCTIONS = {
-        "critical": -20,
-        "high": -15,
-        "medium": -5,
-        "low": -1,
-        "info": 0,
-    }
+    # Use the shared severity-weighted deduction table so opengrep findings
+    # hurt the score the same amount as built-in deterministic checks.
+    SEVERITY_DEDUCTIONS = _STANDARD_DEDUCTIONS
 
     CATEGORY_TO_DIMENSION = {
         "security": "security",
@@ -134,7 +133,7 @@ def compute_scores_from_opengrep(
             sev = sev.value
 
         dimension = CATEGORY_TO_DIMENSION.get(str(cat), "security")
-        deduction = SEVERITY_DEDUCTIONS.get(str(sev), -5)
+        deduction = SEVERITY_DEDUCTIONS.get(str(sev), -8)
 
         check_id = f.get("forge_check_id", "") if isinstance(f, dict) else getattr(f, "forge_check_id", "")
         title = f.get("title", "") if isinstance(f, dict) else getattr(f, "title", "")

@@ -12,6 +12,7 @@ from forge.evaluation.checks import (
     is_test_file,
     read_file_safe,
     parse_ast_safe,
+    severity_deduction,
 )
 
 _ENV_ACCESS = re.compile(
@@ -61,7 +62,7 @@ def _check_ops001(repo_path: str) -> CheckResult:
         name="No CI/CD configuration",
         passed=False,
         severity="high",
-        deduction=-25,
+        deduction=severity_deduction("high"),
         details="No .github/workflows, .gitlab-ci.yml, Jenkinsfile, or equivalent found.",
         fix_guidance="Add CI/CD configuration (.github/workflows/) with lint, test, and build steps.",
     )
@@ -84,7 +85,7 @@ def _check_ops002(repo_path: str) -> CheckResult:
         name="No container config",
         passed=False,
         severity="medium",
-        deduction=-10,
+        deduction=severity_deduction("medium"),
         details="No Dockerfile or docker-compose.yml found.",
         fix_guidance="Create a Dockerfile with a multi-stage build for a production-ready container image.",
     )
@@ -127,7 +128,7 @@ def _check_ops003(repo_path: str) -> CheckResult:
         name="No structured logging",
         passed=passed,
         severity="medium",
-        deduction=0 if passed else -10,
+        deduction=0 if passed else severity_deduction("medium"),
         locations=print_locations[:5] if not passed else [],
         details=f"{print_count} raw print() call(s) without structured logging." if not passed else "",
         fix_guidance="Replace print() with structured logging (logging module, structlog) using appropriate log levels." if not passed else "",
@@ -149,7 +150,7 @@ def _check_ops004(repo_path: str) -> CheckResult:
                         "line": i + 1,
                         "snippet": line.strip()[:120],
                     })
-    deduction = max(-15, -5 * len(locations))
+    deduction = max(severity_deduction("medium") * 2, -10 * len(locations))
     passed = len(locations) == 0
     return CheckResult(
         check_id="OPS-004",
@@ -180,7 +181,7 @@ def _check_ops005(repo_path: str) -> CheckResult:
         name="No .env.example",
         passed=False,
         severity="low",
-        deduction=-5,
+        deduction=severity_deduction("low"),
         details="No .env.example, .env.sample, or .env.template found.",
         fix_guidance="Create a .env.example documenting all required environment variables with descriptions and example values.",
     )
@@ -224,7 +225,7 @@ def _check_ops006(repo_path: str) -> CheckResult:
         name="No linter config",
         passed=False,
         severity="low",
-        deduction=-5,
+        deduction=severity_deduction("low"),
         details="No linter configuration found.",
         fix_guidance="Add linter configuration (ruff.toml, .eslintrc, or pyproject.toml [tool.ruff]) with sensible defaults.",
     )

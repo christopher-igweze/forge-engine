@@ -13,6 +13,7 @@ from forge.evaluation.checks import (
     iter_source_files,
     read_file_safe,
     parse_ast_safe,
+    severity_deduction,
 )
 
 
@@ -35,7 +36,7 @@ def _check_mnt001(repo_path: str) -> CheckResult:
                             "line": node.lineno,
                             "snippet": f"class {node.name}: {span} lines",
                         })
-    deduction = max(-30, -10 * len(locations))
+    deduction = max(severity_deduction("high") * 2, -20 * len(locations))
     passed = len(locations) == 0
     return CheckResult(
         check_id="MNT-001",
@@ -86,7 +87,7 @@ def _check_mnt002(repo_path: str) -> CheckResult:
                         "line": node.lineno,
                         "snippet": f"def {node.name}(): complexity={cc}",
                     })
-    deduction = max(-20, -5 * len(locations))
+    deduction = max(severity_deduction("medium") * 2, -10 * len(locations))
     passed = len(locations) == 0
     return CheckResult(
         check_id="MNT-002",
@@ -133,7 +134,7 @@ def _check_mnt003(repo_path: str) -> CheckResult:
                         "line": node.lineno,
                         "snippet": f"def {node.name}(): nesting depth={depth}",
                     })
-    deduction = max(-15, -3 * len(locations))
+    deduction = max(severity_deduction("medium") * 2, -8 * len(locations))
     passed = len(locations) == 0
     return CheckResult(
         check_id="MNT-003",
@@ -184,7 +185,7 @@ def _check_mnt004(repo_path: str) -> CheckResult:
         if len(locations) >= 5:
             break
 
-    deduction = max(-15, -3 * len(locations))
+    deduction = max(severity_deduction("medium") * 2, -8 * len(locations))
     passed = len(locations) == 0
     return CheckResult(
         check_id="MNT-004",
@@ -258,7 +259,7 @@ def _check_mnt005(repo_path: str) -> CheckResult:
             "snippet": " -> ".join(cycle),
         })
 
-    deduction = max(-15, -5 * len(locations))
+    deduction = max(severity_deduction("medium") * 2, -10 * len(locations))
     passed = len(locations) == 0
     return CheckResult(
         check_id="MNT-005",

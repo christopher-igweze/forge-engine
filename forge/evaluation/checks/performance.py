@@ -11,6 +11,7 @@ from forge.evaluation.checks import (
     iter_source_files,
     read_file_safe,
     parse_ast_safe,
+    severity_deduction,
 )
 
 _DB_CALL_PATTERN = re.compile(
@@ -83,7 +84,7 @@ def _check_prf001(repo_path: str) -> CheckResult:
 
         LoopDBVisitor().visit(tree)
 
-    deduction = max(-20, -10 * len(locations))
+    deduction = max(severity_deduction("high") * 2, -20 * len(locations))
     passed = len(locations) == 0
     return CheckResult(
         check_id="PRF-001",
@@ -112,7 +113,7 @@ def _check_prf002(repo_path: str) -> CheckResult:
                         "line": i + 1,
                         "snippet": line.strip()[:120],
                     })
-    deduction = max(-15, -5 * len(locations))
+    deduction = max(severity_deduction("medium") * 2, -10 * len(locations))
     passed = len(locations) == 0
     return CheckResult(
         check_id="PRF-002",
@@ -144,7 +145,7 @@ def _check_prf003(repo_path: str) -> CheckResult:
                             "line": i + 1,
                             "snippet": line.strip()[:120],
                         })
-    deduction = max(-10, -5 * len(locations))
+    deduction = max(severity_deduction("medium") * 2, -10 * len(locations))
     passed = len(locations) == 0
     return CheckResult(
         check_id="PRF-003",
@@ -181,7 +182,7 @@ def _check_prf004(repo_path: str) -> CheckResult:
                 })
                 break  # One per function
 
-    deduction = max(-15, -5 * len(locations))
+    deduction = max(severity_deduction("medium") * 2, -10 * len(locations))
     passed = len(locations) == 0
     return CheckResult(
         check_id="PRF-004",
@@ -212,7 +213,7 @@ def _check_prf005(repo_path: str) -> CheckResult:
         name="No caching present",
         passed=False,
         severity="low",
-        deduction=-3,
+        deduction=severity_deduction("low"),
         details="No caching mechanism (lru_cache, Redis, memcache, etc.) found.",
         fix_guidance="Add caching (functools.lru_cache, Redis, or framework caching) for expensive operations.",
     )

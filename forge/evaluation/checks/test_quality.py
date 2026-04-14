@@ -13,6 +13,7 @@ from forge.evaluation.checks import (
     read_file_safe,
     parse_ast_safe,
     _SKIP_DIRS,
+    severity_deduction,
 )
 
 
@@ -37,7 +38,7 @@ def _check_tst001(repo_path: str) -> CheckResult:
         name="No test files",
         passed=passed,
         severity="critical",
-        deduction=0 if passed else -40,
+        deduction=0 if passed else severity_deduction("critical"),
         details=f"Found {len(test_files)} test file(s)." if passed else "No test files found.",
         fix_guidance="Create test files with pytest (Python) or jest (JS/TS) covering core business logic." if not passed else "",
     )
@@ -75,7 +76,7 @@ def _check_tst002(repo_path: str) -> CheckResult:
         name="Only one test type",
         passed=passed,
         severity="medium",
-        deduction=0 if passed else -10,
+        deduction=0 if passed else severity_deduction("medium"),
         details="" if passed else "Missing unit and/or integration test separation.",
         fix_guidance="Add integration tests alongside unit tests to cover API endpoints and external service interactions." if not passed else "",
     )
@@ -106,7 +107,7 @@ def _check_tst003(repo_path: str) -> CheckResult:
                             "line": node.lineno,
                             "snippet": f"def {node.name}() — no assertions",
                         })
-    deduction = max(-15, -5 * len(locations))
+    deduction = max(severity_deduction("medium") * 2, -10 * len(locations))
     passed = len(locations) == 0
     return CheckResult(
         check_id="TST-003",
@@ -165,7 +166,7 @@ def _check_tst004(repo_path: str) -> CheckResult:
         name="No tests for critical paths",
         passed=passed,
         severity="high",
-        deduction=0 if passed else -10,
+        deduction=0 if passed else severity_deduction("high"),
         locations=missing[:5],
         details=f"{len(missing)} critical source file(s) lack test coverage." if missing else "",
         fix_guidance="Add dedicated tests for auth, payment, and core business workflow modules." if not passed else "",
@@ -194,7 +195,7 @@ def _check_tst005(repo_path: str) -> CheckResult:
         name="Low test-to-source ratio",
         passed=passed,
         severity="medium",
-        deduction=0 if passed else -5,
+        deduction=0 if passed else severity_deduction("medium"),
         details=f"Test-to-source ratio: {ratio:.2f} ({test_count} tests / {source_count} sources).",
         fix_guidance="Add tests for untested modules to reach at least a 0.3 test-to-source file ratio." if not passed else "",
     )
@@ -246,7 +247,7 @@ def _check_tst006(repo_path: str) -> CheckResult:
         name="No test configuration",
         passed=False,
         severity="low",
-        deduction=-3,
+        deduction=severity_deduction("low"),
         details="No pytest.ini, jest.config, pyproject.toml [tool.pytest], or equivalent found.",
         fix_guidance="Add a test configuration file (pytest.ini, jest.config.js) to standardize test discovery and settings.",
     )
@@ -271,7 +272,7 @@ def _check_tst007(repo_path: str) -> CheckResult:
                 name="Low coverage threshold",
                 passed=passed,
                 severity="medium",
-                deduction=0 if passed else -5,
+        deduction=0 if passed else severity_deduction("medium"),
                 details=f"Coverage threshold: {threshold}%.",
                 fix_guidance="" if passed else _tst007_fix,
             )
@@ -289,7 +290,7 @@ def _check_tst007(repo_path: str) -> CheckResult:
                 name="Low coverage threshold",
                 passed=passed,
                 severity="medium",
-                deduction=0 if passed else -5,
+        deduction=0 if passed else severity_deduction("medium"),
                 details=f"Coverage threshold: {threshold}%.",
                 fix_guidance="" if passed else _tst007_fix,
             )
@@ -308,7 +309,7 @@ def _check_tst007(repo_path: str) -> CheckResult:
                     name="Low coverage threshold",
                     passed=passed,
                     severity="medium",
-                    deduction=0 if passed else -5,
+        deduction=0 if passed else severity_deduction("medium"),
                     details=f"Coverage threshold: {threshold}%.",
                     fix_guidance="" if passed else _tst007_fix,
                 )
@@ -319,7 +320,7 @@ def _check_tst007(repo_path: str) -> CheckResult:
         name="Low coverage threshold",
         passed=False,
         severity="medium",
-        deduction=-5,
+        deduction=severity_deduction("medium"),
         details="No coverage threshold configured.",
         fix_guidance=_tst007_fix,
     )

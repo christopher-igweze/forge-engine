@@ -23,6 +23,30 @@ class CheckResult:
 
 
 # ---------------------------------------------------------------------------
+# Standard severity-weighted deductions (v1.5 scoring rewrite)
+#
+# These values drive the deterministic dimension scores. They are tuned so
+# that 5+ critical/high failures in a single dimension push that dimension's
+# score below 50. Individual check functions should derive their deduction
+# from their declared severity via `severity_deduction()` to keep scoring
+# consistent across the whole evaluation framework.
+# ---------------------------------------------------------------------------
+
+SEVERITY_DEDUCTIONS: dict[str, int] = {
+    "critical": -35,
+    "high": -20,
+    "medium": -8,
+    "low": -3,
+    "info": 0,
+}
+
+
+def severity_deduction(severity: str) -> int:
+    """Return the standard score deduction for a failed check of this severity."""
+    return SEVERITY_DEDUCTIONS.get((severity or "medium").lower(), -8)
+
+
+# ---------------------------------------------------------------------------
 # Shared utilities
 # ---------------------------------------------------------------------------
 
@@ -95,6 +119,8 @@ from forge.evaluation.checks.operations import run_operations_checks
 
 __all__ = [
     "CheckResult",
+    "SEVERITY_DEDUCTIONS",
+    "severity_deduction",
     "iter_source_files",
     "is_test_file",
     "read_file_safe",

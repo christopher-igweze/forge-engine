@@ -41,6 +41,86 @@ from forge.execution.report_rendering import (  # noqa: F401
 logger = logging.getLogger(__name__)
 
 
+_CHECK_DIMENSION_TO_CATEGORY = {
+    "SEC": "security",
+    "REL": "reliability",
+    "MNT": "quality",
+    "TST": "quality",
+    "PRF": "performance",
+    "DOC": "quality",
+    "OPS": "quality",
+}
+
+
+def _deterministic_check_to_finding(
+    failed_check: dict,
+    existing_dedup_keys: set[tuple],
+) -> dict | None:
+    """Convert a failed deterministic check into an AuditFinding-shaped dict.
+
+    Returns None when the check is already represented by another finding
+    (e.g. an Opengrep rule with the same `forge_check_id` + file).
+    """
+    check_id = failed_check.get("check_id") or ""
+    name = failed_check.get("name") or check_id
+    severity = (failed_check.get("severity") or "medium").lower()
+    details = failed_check.get("details") or ""
+    fix_guidance = failed_check.get("fix_guidance") or ""
+    raw_locs = failed_check.get("locations") or []
+
+    # Map check ID prefix (e.g. "SEC-001") to a finding category.
+    prefix = check_id.split("-", 1)[0] if check_id else ""
+    category = _CHECK_DIMENSION_TO_CATEGORY.get(prefix, "quality")
+
+    # Normalize locations to AuditFinding's FindingLocation shape.
+    locations = []
+    primary_file = ""
+    primary_line = None
+    for loc in raw_locs:
+        file_path = loc.get("file") or loc.get("file_path") or ""
+        line = loc.get("line") or loc.get("line_start")
+        if file_path and not primary_file:
+            primary_file = file_path
+            primary_line = line
+        locations.append({
+            "file_path": file_path,
+            "line_start": line,
+            "line_end": loc.get("line_end") or line,
+            "snippet": loc.get("snippet", ""),
+        })
+
+    # Dedup signature: (check_id, primary file). If an Opengrep finding
+    # already carries forge_check_id == this check, skip it.
+    dedup_key = (check_id, primary_file or "")
+    if dedup_key in existing_dedup_keys:
+        return None
+
+    description = details or (
+        f"Deterministic check {check_id} failed."
+        if check_id else "Deterministic check failed."
+    )
+
+    return {
+        "id": f"DET-{check_id}" if check_id else f"DET-{abs(hash(name)) % 10_000_000:07d}",
+        "title": name,
+        "description": description,
+        "category": category,
+        "severity": severity,
+        "locations": locations,
+        "suggested_fix": fix_guidance,
+        "confidence": 1.0,
+        "cwe_id": "",
+        "owasp_ref": failed_check.get("asvs_ref") or "",
+        "agent": "deterministic_check",
+        "actionability": "must_fix" if severity in ("critical", "high") else "should_fix",
+        "intent_signal": "unintentional",
+        "rule_family": (check_id or "deterministic-check").lower(),
+        "source": "deterministic",
+        "check_id": check_id,
+        "dedup_key": f"det:{check_id}:{primary_file}:{primary_line or ''}",
+    }
+
+
 def generate_discovery_report(
     findings: list[AuditFinding],
     plan: RemediationPlan | None,
@@ -50,6 +130,7 @@ def generate_discovery_report(
     cost_usd: float = 0.0,
     codebase_map: CodebaseMap | None = None,
     graph_data: dict | None = None,
+    evaluation_result: dict | None = None,
 ) -> tuple[dict[str, str], dict]:
     """Generate a discovery-phase report with all findings and remediation plan.
 
@@ -61,6 +142,10 @@ def generate_discovery_report(
     Args:
         graph_data: Enriched CodeGraph dict from hive discovery. If None,
             attempts to load from artifacts_dir/hive/layer1_enriched_graph.json.
+        evaluation_result: v3 deterministic evaluation result. When provided,
+            its failed_checks are surfaced as structured findings in the
+            report (deduplicated against LLM/Opengrep findings), giving
+            consumers a single complete findings list.
     """
     report_dir = os.path.join(artifacts_dir, "report")
     os.makedirs(report_dir, exist_ok=True)
@@ -71,21 +156,49 @@ def generate_discovery_report(
     if graph_data is None:
         graph_data = _load_graph_data(artifacts_dir)
 
-    # Severity breakdown
+    # Serialize LLM + Opengrep findings first.
+    findings_dicts = [f.model_dump(mode="json") for f in findings]
+
+    # Build a dedup index so deterministic checks don't duplicate findings
+    # already surfaced by Opengrep (which can emit a matching forge_check_id).
+    existing_dedup_keys: set[tuple] = set()
+    for fd in findings_dicts:
+        primary_file = ""
+        locs = fd.get("locations") or []
+        if locs:
+            primary_file = locs[0].get("file_path") or ""
+        # Opengrep rules carry forge_check_id matching deterministic check IDs
+        og_check_id = fd.get("forge_check_id") or fd.get("check_id") or ""
+        if og_check_id:
+            existing_dedup_keys.add((og_check_id, primary_file))
+
+    # Surface failed deterministic checks as structured findings.
+    deterministic_added = 0
+    if evaluation_result:
+        det_checks = evaluation_result.get("deterministic_checks") or {}
+        failed_checks = det_checks.get("failed_checks") or []
+        for fc in failed_checks:
+            synthesized = _deterministic_check_to_finding(fc, existing_dedup_keys)
+            if synthesized is None:
+                continue
+            # Track the synthesized key so a duplicate failed_check entry
+            # can't sneak in twice.
+            existing_dedup_keys.add((synthesized["check_id"], (synthesized["locations"][0]["file_path"] if synthesized["locations"] else "")))
+            findings_dicts.append(synthesized)
+            deterministic_added += 1
+
+    # Severity / category breakdowns computed AFTER merging so counts are complete.
     sev_counts = Counter(
-        f.severity.value if hasattr(f.severity, "value") else str(f.severity)
-        for f in findings
+        (fd.get("severity") or "medium") for fd in findings_dicts
     )
     cat_counts = Counter(
-        f.category.value if hasattr(f.category, "value") else str(f.category)
-        for f in findings
+        (fd.get("category") or "quality") for fd in findings_dicts
     )
 
     # Actionability breakdown
     action_groups: dict[str, list[dict]] = {
         "must_fix": [], "should_fix": [], "consider": [], "informational": [],
     }
-    findings_dicts = [f.model_dump(mode="json") for f in findings]
     for fd in findings_dicts:
         tier = fd.get("actionability", "") or "consider"
         if tier in action_groups:
@@ -93,8 +206,9 @@ def generate_discovery_report(
         else:
             action_groups["consider"].append(fd)
 
+    total_findings = len(findings_dicts)
     must_should = len(action_groups["must_fix"]) + len(action_groups["should_fix"])
-    signal_ratio = round(must_should / len(findings), 2) if findings else 0.0
+    signal_ratio = round(must_should / total_findings, 2) if total_findings else 0.0
 
     report_data = {
         "run_id": run_id,
@@ -105,7 +219,11 @@ def generate_discovery_report(
         "loc_total": codebase_map.loc_total if codebase_map else 0,
         "file_count": codebase_map.file_count if codebase_map else 0,
         "primary_language": codebase_map.primary_language if codebase_map else "",
-        "total_findings": len(findings),
+        "total_findings": total_findings,
+        "findings_sources": {
+            "llm_and_opengrep": len(findings),
+            "deterministic_checks": deterministic_added,
+        },
         "severity_breakdown": dict(sev_counts),
         "category_breakdown": dict(cat_counts),
         "findings_by_actionability": {
