@@ -11,6 +11,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY pyproject.toml .
 COPY forge/ forge/
 
+# Install Opengrep first so its CLI is on PATH when FORGE runs the
+# deterministic SAST phase. Without this, deterministic scans silently
+# no-op and reports come back empty.
+RUN pip install --no-cache-dir opengrep
+
 # Install forge-engine (no platform extras needed)
 RUN pip install --no-cache-dir ".[dev]"
 
