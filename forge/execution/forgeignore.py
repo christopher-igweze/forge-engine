@@ -374,6 +374,34 @@ class ForgeIgnore:
                 return True, rule.reason
         return False, None
 
+    def path_excludes(self) -> list[str]:
+        """Return file/path patterns from suppressions that target entire
+        directories (no rule_family, check_id, or category restriction).
+
+        These can be safely passed to Opengrep's ``--exclude`` flag to skip
+        scanning upfront. Entries with rule-specific matchers are left for
+        post-scan filtering (they're valid findings in some contexts).
+        """
+        excludes: list[str] = []
+        for rule in self.rules:
+            file_pattern = rule.file or rule.path
+            if not file_pattern:
+                continue
+            # Only translate to upfront exclude when it's a "never scan"
+            # directive — no rule_family / check_id / category restriction
+            # and no line_range / symbol anchor.
+            if (
+                rule.rule_family
+                or rule.check_id
+                or rule.category
+                or rule.line_range
+                or rule.symbol
+                or rule.pattern
+            ):
+                continue
+            excludes.append(file_pattern)
+        return excludes
+
     def serialize_for_prompt(self) -> str:
         """Serialize .forgeignore rules into a human-readable string for LLM prompt injection."""
         if not self.rules:

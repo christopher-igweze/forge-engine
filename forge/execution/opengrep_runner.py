@@ -103,6 +103,8 @@ class OpengrepRunner:
         use_community_rules: bool = True,
         timeout: int = 900,
         excludes: tuple[str, ...] | None = None,
+        extra_excludes: list[str] | None = None,
+        respect_gitignore: bool = True,
     ):
         """Initialize runner.
 
@@ -114,10 +116,18 @@ class OpengrepRunner:
                      mid-size monorepos; smaller repos finish in seconds.
             excludes: Tuple of directory names to skip. Defaults to
                       DEFAULT_EXCLUDES (node_modules, .venv, etc.).
+            extra_excludes: Additional exclude patterns sourced from
+                      `.forgeignore` entries that target entire directories
+                      (no rule_family / check_id / category). These get
+                      appended to the default excludes for upfront skipping.
+            respect_gitignore: Pass ``--use-git-ignore`` to Opengrep so it
+                      honors the repo's ``.gitignore``. True by default.
         """
         self.timeout = timeout
         self.use_community_rules = use_community_rules
         self.excludes = excludes if excludes is not None else self.DEFAULT_EXCLUDES
+        self.extra_excludes = tuple(extra_excludes or ())
+        self.respect_gitignore = respect_gitignore
 
         if rules_dirs is None:
             # Default to forge/rules/ relative to this file
@@ -164,6 +174,23 @@ class OpengrepRunner:
         # in user code.
         for excl in self.excludes:
             cmd.extend(["--exclude", excl])
+
+        # Extra excludes from .forgeignore (file-only patterns with no
+        # rule_family/check_id restriction — they mean "never scan here")
+        for excl in self.extra_excludes:
+            cmd.extend(["--exclude", excl])
+
+        # Respect the repo's .gitignore so vendored / generated content
+        # the project already flags as untracked is also skipped by SAST.
+        if self.respect_gitignore:
+            cmd.append("--use-git-ignore")
+
+        logger.info(
+            "Opengrep excludes — defaults=%d forgeignore=%d gitignore=%s",
+            len(self.excludes),
+            len(self.extra_excludes),
+            "yes" if self.respect_gitignore else "no",
+        )
 
         # JSON output, scan target
         cmd.extend(["--json", "--quiet", repo_path])

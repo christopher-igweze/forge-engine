@@ -238,11 +238,36 @@ async def _run_discovery(
             )
 
             if opengrep_available():
+                # Extract upfront exclude patterns from .forgeignore. Entries
+                # that target an entire directory (no rule_family / check_id /
+                # category restriction) are passed to Opengrep's --exclude
+                # flag so those paths aren't scanned at all — much faster
+                # than scanning then suppressing.
+                forgeignore_excludes: list[str] = []
+                try:
+                    from forge.execution.forgeignore import ForgeIgnore
+                    fi_pre = ForgeIgnore.load(state.repo_path)
+                    forgeignore_excludes = fi_pre.path_excludes()
+                    if forgeignore_excludes:
+                        logger.info(
+                            "Opengrep: translating %d .forgeignore path rule(s) "
+                            "to --exclude flags: %s",
+                            len(forgeignore_excludes),
+                            forgeignore_excludes,
+                        )
+                except Exception as e:
+                    logger.warning(
+                        ".forgeignore upfront-exclude extraction failed "
+                        "(non-fatal): %s", e,
+                    )
+
                 rules_dir = cfg.opengrep_rules_dir or None  # None = use built-in
                 runner = OpengrepRunner(
                     rules_dirs=[rules_dir] if rules_dir else None,
                     use_community_rules=cfg.opengrep_community_rules,
                     timeout=cfg.opengrep_timeout,
+                    extra_excludes=forgeignore_excludes,
+                    respect_gitignore=True,
                 )
                 raw_og_findings = runner.scan(state.repo_path)
 
@@ -257,6 +282,35 @@ async def _run_discovery(
                     "Opengrep found %d deterministic findings",
                     len(opengrep_findings),
                 )
+
+                # Post-scan verification: if the upfront --exclude worked,
+                # no finding should reference an excluded path. Log a
+                # warning if any leaked through — indicates Opengrep ignored
+                # our exclude flags, which would be a bug worth investigating.
+                if forgeignore_excludes and opengrep_findings:
+                    from fnmatch import fnmatch as _fnmatch
+                    leaked = [
+                        f for f in opengrep_findings
+                        if any(
+                            _fnmatch(f.get("file_path", ""), pat)
+                            or f.get("file_path", "").startswith(pat.rstrip("/*"))
+                            for pat in forgeignore_excludes
+                        )
+                    ]
+                    if leaked:
+                        logger.warning(
+                            "Opengrep returned %d finding(s) in paths that "
+                            "were supposed to be excluded via --exclude. "
+                            "This indicates the upfront exclusion didn't "
+                            "take effect. Excluded patterns: %s",
+                            len(leaked),
+                            forgeignore_excludes,
+                        )
+                    else:
+                        logger.info(
+                            "Verified: 0 findings in .forgeignore-excluded "
+                            "paths. Upfront exclusion working correctly."
+                        )
             else:
                 logger.info("Opengrep not installed — skipping deterministic scan")
         except Exception as e:
