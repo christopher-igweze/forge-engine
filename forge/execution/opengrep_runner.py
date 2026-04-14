@@ -185,6 +185,15 @@ class OpengrepRunner:
         if self.respect_gitignore:
             cmd.append("--use-git-ignore")
 
+        # Hard per-rule timeout inside opengrep itself. Without this a
+        # single slow rule (or a hung registry fetch when --config auto is
+        # enabled) can sleep indefinitely — we observed a scan where
+        # opengrep used <1 second of CPU over 40 minutes because it was
+        # blocked on the Opengrep registry HTTP call. Our own
+        # subprocess.run(timeout=...) is the outer bound; this is the
+        # inner one.
+        cmd.extend(["--timeout", "120"])
+
         logger.info(
             "Opengrep excludes — defaults=%d forgeignore=%d gitignore=%s",
             len(self.excludes),

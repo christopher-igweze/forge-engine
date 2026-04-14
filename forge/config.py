@@ -106,7 +106,12 @@ class ForgeConfig(BaseModel):
 
     # ── Opengrep Integration ──────────────────────────────────────────
     opengrep_enabled: bool = True          # Use Opengrep for deterministic scanning
-    opengrep_community_rules: bool = True  # Include community rules alongside FORGE rules
+    # --config auto fetches rules from the Opengrep registry on every run.
+    # In ephemeral sandboxes (no ~/.opengrep cache reuse) this means every
+    # scan hangs on the registry HTTP call if it is slow or the network is
+    # flaky. Our custom forge/rules/ already cover the important checks, so
+    # community rules default to OFF. Opt in explicitly if you want them.
+    opengrep_community_rules: bool = False
     opengrep_timeout: int = 300            # Max seconds for Opengrep scan
     opengrep_rules_dir: str = ""           # Custom rules dir (empty = use built-in forge/rules/)
 
