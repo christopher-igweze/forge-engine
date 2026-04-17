@@ -292,6 +292,52 @@ def forge_config() -> dict:
 
 
 @mcp.tool()
+def forge_update(check: bool = False) -> dict:
+    """Update FORGE (vibe2prod) to the latest version from PyPI.
+
+    Runs the same 5-step upgrade pipeline as `vibe2prod update`:
+    package, skills, hooks, MCP config, and config schema.
+
+    Args:
+        check: If True, dry-run only — show what would change without applying.
+
+    Returns:
+        Update result with steps and version info.
+    """
+    try:
+        import subprocess
+
+        cmd = ["vibe2prod", "update", "--json"]
+        if check:
+            cmd.append("--check")
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        # Try to parse JSON output
+        try:
+            return json.loads(result.stdout)
+        except (json.JSONDecodeError, ValueError):
+            # Fallback to raw output
+            return {
+                "status": "completed" if result.returncode == 0 else "failed",
+                "output": result.stdout.strip(),
+                "error": result.stderr.strip() if result.returncode != 0 else None,
+            }
+    except subprocess.TimeoutExpired:
+        return {"status": "timeout", "message": "Update timed out after 120s"}
+    except FileNotFoundError:
+        return {"status": "error", "message": "vibe2prod CLI not found — install with: pip install vibe2prod"}
+    except Exception as e:
+        logger.exception("forge_update failed")
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool()
 def forge_health() -> dict:
     """Health check for the FORGE MCP server.
 
