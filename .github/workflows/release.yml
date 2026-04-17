@@ -63,16 +63,17 @@ jobs:
       - name: Wait for PyPI propagation
         if: ${{ !inputs.skip_pypi }}
         run: |
-          # PyPI's CDN can take ~30s to serve a freshly published version
-          for i in 1 2 3 4 5 6; do
+          # PyPI's CDN can take 30-120s to serve a freshly published version
+          for i in $(seq 1 12); do
             if pip index versions vibe2prod 2>&1 | grep -q "${{ needs.publish.outputs.version }}"; then
               echo "vibe2prod==${{ needs.publish.outputs.version }} is live on PyPI"
               exit 0
             fi
-            echo "Attempt $i: not yet on PyPI, sleeping 10s..."
-            sleep 10
+            echo "Attempt $i/12: not yet on PyPI, sleeping 15s..."
+            sleep 15
           done
-          echo "PyPI propagation timed out — proceeding anyway"
+          echo "::error::PyPI propagation timed out after 3 minutes"
+          exit 1
 
       - name: Build Daytona snapshot
         env:
