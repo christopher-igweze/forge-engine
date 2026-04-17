@@ -115,7 +115,13 @@ def main() -> int:
             # Delete it and retry once.
             print(f"\nsnapshot {snapshot_name!r} exists (likely broken) — deleting and retrying")
             try:
-                daytona.snapshot.delete(snapshot_name)
+                # SDK delete() expects the snapshot object, not a name string.
+                snapshots = daytona.snapshot.list()
+                snap_obj = next((s for s in snapshots if getattr(s, "name", None) == snapshot_name), None)
+                if snap_obj:
+                    daytona.snapshot.delete(snap_obj)
+                else:
+                    print(f"warning: snapshot {snapshot_name!r} not found in list — trying create anyway", file=sys.stderr)
             except Exception as del_exc:
                 print(f"warning: failed to delete stale snapshot: {del_exc}", file=sys.stderr)
             daytona.snapshot.create(
