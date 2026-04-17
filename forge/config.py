@@ -25,9 +25,11 @@ FORGE_ROLE_TO_MODEL_FIELD: dict[str, str] = {
 # ── Default model assignments per spec ────────────────────────────────
 
 FORGE_DEFAULT_MODELS: dict[str, str] = {
+    # Analysis — cheap, high-throughput (bulk file/code scanning)
     "codebase_analyst_model": "minimax/minimax-m2.5",
-    "security_auditor_model": "minimax/minimax-m2.5",
-    "fix_strategist_model": "minimax/minimax-m2.5",
+    # Reasoning — mid-tier (security judgement + triage quality matter)
+    "security_auditor_model": "anthropic/claude-haiku-4.5",
+    "fix_strategist_model": "anthropic/claude-haiku-4.5",
 }
 
 # ── Provider routing ──────────────────────────────────────────────────
