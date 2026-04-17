@@ -32,6 +32,7 @@ from daytona import (
     Image,
     Resources,
 )
+from daytona.common.errors import DaytonaError
 
 
 OPENGREP_VERSION = "v1.19.0"
@@ -99,14 +100,34 @@ def main() -> int:
     )
 
     print(f"building snapshot {snapshot_name!r} (vibe2prod=={version})...")
-    daytona.snapshot.create(
-        CreateSnapshotParams(
-            name=snapshot_name,
-            image=image,
-            resources=Resources(cpu=2, memory=4, disk=10),
-        ),
-        on_logs=lambda chunk: print(chunk, end=""),
-    )
+    try:
+        daytona.snapshot.create(
+            CreateSnapshotParams(
+                name=snapshot_name,
+                image=image,
+                resources=Resources(cpu=2, memory=4, disk=10),
+            ),
+            on_logs=lambda chunk: print(chunk, end=""),
+        )
+    except DaytonaError as exc:
+        if "already exists" in str(exc).lower():
+            # A previous failed build left a broken snapshot entry.
+            # Delete it and retry once.
+            print(f"\nsnapshot {snapshot_name!r} exists (likely broken) — deleting and retrying")
+            try:
+                daytona.snapshot.delete(snapshot_name)
+            except Exception as del_exc:
+                print(f"warning: failed to delete stale snapshot: {del_exc}", file=sys.stderr)
+            daytona.snapshot.create(
+                CreateSnapshotParams(
+                    name=snapshot_name,
+                    image=image,
+                    resources=Resources(cpu=2, memory=4, disk=10),
+                ),
+                on_logs=lambda chunk: print(chunk, end=""),
+            )
+        else:
+            raise
     print(f"\nsnapshot {snapshot_name!r} created")
     return 0
 
