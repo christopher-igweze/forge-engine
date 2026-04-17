@@ -116,6 +116,7 @@ jobs:
           PY
 
       - name: Open PR
+        id: create-pr
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.VIBE2PROD_REPO_TOKEN }}
@@ -132,7 +133,14 @@ jobs:
             Bumps `forge_sandbox_snapshot` default in `backend/config.py` to
             point at the freshly built Daytona snapshot
             `vibe2prod-${{ needs.publish.outputs.version }}`.
-
-            Merge after verifying the snapshot works on staging
-            (`api-staging.vibe2prod.verstandai.site`).
           delete-branch: true
+
+      - name: Auto-merge PR
+        if: steps.create-pr.outputs.pull-request-number
+        env:
+          GH_TOKEN: ${{ secrets.VIBE2PROD_REPO_TOKEN }}
+        run: |
+          gh pr merge ${{ steps.create-pr.outputs.pull-request-number }} \
+            --repo christopher-igweze/vibe2prod \
+            --squash \
+            --delete-branch
