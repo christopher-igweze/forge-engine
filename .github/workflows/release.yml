@@ -61,18 +61,19 @@ jobs:
         run: pip install daytona
 
       - name: Wait for PyPI propagation
-        if: ${{ !inputs.skip_pypi }}
         run: |
-          # PyPI's CDN can take 30-120s to serve a freshly published version
-          for i in $(seq 1 12); do
-            if pip index versions vibe2prod 2>&1 | grep -q "${{ needs.publish.outputs.version }}"; then
-              echo "vibe2prod==${{ needs.publish.outputs.version }} is live on PyPI"
+          # Verify the package is actually installable (not just listed)
+          # PyPI CDN edges can take 30-180s to propagate
+          VERSION="${{ needs.publish.outputs.version }}"
+          for i in $(seq 1 20); do
+            if pip install --dry-run "vibe2prod==$VERSION" 2>&1 | grep -q "Would install"; then
+              echo "vibe2prod==$VERSION is installable on PyPI"
               exit 0
             fi
-            echo "Attempt $i/12: not yet on PyPI, sleeping 15s..."
+            echo "Attempt $i/20: vibe2prod==$VERSION not installable yet, sleeping 15s..."
             sleep 15
           done
-          echo "::error::PyPI propagation timed out after 3 minutes"
+          echo "::error::PyPI propagation timed out after 5 minutes"
           exit 1
 
       - name: Build Daytona snapshot
